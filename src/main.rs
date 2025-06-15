@@ -22,12 +22,7 @@ pub struct SignalingMessage {
 
 pub type Clients = Arc<Mutex<HashMap<String, actix_web_actors::ws::WebsocketContext<SignalingSession>>>>;
 
-#[get("/")]
-async fn index() -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(include_str!("../static/dist/index.html")))
-}
+// Remove the index handler since we'll use Files to serve everything
 
 #[get("/ws")]
 async fn websocket(
@@ -46,7 +41,6 @@ async fn main() -> ShuttleActixWeb<impl FnOnce(&mut ServiceConfig) + Send + Clon
     let config = move |cfg: &mut ServiceConfig| {
         cfg
             .app_data(web::Data::new(signaling_server))
-            .service(index)
             .service(websocket)
             .service(Files::new("/", "static/dist/").index_file("index.html"));
     };

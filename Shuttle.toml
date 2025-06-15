@@ -1,0 +1,4 @@
+name = "fps"
+
+[build]
+assets = ["static/dist/index.html", "static/dist/assets/*"]
