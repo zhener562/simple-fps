@@ -1,0 +1,273 @@
+
+body, html {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  background-color: #333;
+  color: white;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh; /* Ensure body takes full viewport height for centering menu */
+}
+
+#main-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 30px;
+  background-color: rgba(0, 0, 0, 0.8);
+  border-radius: 10px;
+  box-shadow: 0 0 15px rgba(0,0,0,0.5);
+  z-index: 20; /* Ensure main menu is above other elements initially */
+  position: relative; /* For z-index to work effectively */
+}
+
+#main-menu h1 {
+  margin-bottom: 20px;
+  font-size: 2.5em;
+}
+
+#main-menu button {
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  padding: 15px 30px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 1.2em;
+  margin: 10px 5px;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background-color 0.3s ease;
+}
+
+#main-menu button:hover {
+  background-color: #45a049;
+}
+
+#main-menu .instructions-preview {
+  margin-top: 20px;
+  font-size: 0.9em;
+  color: #ccc;
+}
+
+/* Map Selection Styles */
+#map-selection-container {
+  margin-top: 20px;
+  margin-bottom: 10px;
+  width: 100%;
+  text-align: center;
+}
+
+#map-selection-container h3 {
+  margin-bottom: 10px;
+  font-size: 1.1em;
+  color: #ddd;
+}
+
+#map-options {
+  display: flex;
+  justify-content: center;
+  gap: 10px; /* Spacing between map buttons */
+  flex-wrap: wrap; /* Allow buttons to wrap on smaller screens if necessary */
+}
+
+.map-select-btn {
+  background-color: #555; /* Neutral default color */
+  color: white;
+  border: 2px solid transparent; /* For selected state */
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 1em;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.map-select-btn:hover {
+  background-color: #666;
+}
+
+.map-select-btn.selected-map {
+  background-color: #007bff; /* Highlight color for selected map */
+  border-color: #0056b3; /* Darker border for selected map */
+}
+/* End Map Selection Styles */
+
+
+#game-container {
+  width: 100vw;
+  height: 100vh;
+  display: none; /* Initially hidden */
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1; /* Behind overlays */
+}
+
+#instruction-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: none; /* Initially hidden, shown before pointer lock */
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  z-index: 10;
+  cursor: pointer;
+}
+
+#scope-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: none; /* Initially hidden, shown via JS */
+  z-index: 5; 
+  pointer-events: none; 
+  /* Creates a circular transparent area in the center, black outside */
+  background: radial-gradient(
+    circle,
+    transparent 0%, /* Start of transparent area */
+    transparent 22%, /* End of transparent area - adjust this % for scope 'lens' size */
+    rgba(0, 0, 0, 0.97) 22.5%, /* Start of black vignette, sharp transition */
+    rgba(0, 0, 0, 0.97) 100% /* Fully black to edges */
+  );
+  justify-content: center; /* For aligning crosshair pseudo-elements if needed */
+  align-items: center;
+}
+
+/* Simple CSS Crosshair for Scope */
+#scope-overlay::before,
+#scope-overlay::after {
+  content: '';
+  position: absolute;
+  background-color: rgba(255, 0, 0, 0.85); /* Red crosshair, slightly transparent */
+  z-index: 6; /* Ensure crosshairs are on top of the radial gradient background */
+}
+
+#scope-overlay::before { /* Horizontal line */
+  left: 50%; /* Start from center */
+  top: 50%;
+  width: 10%; /* Length of the line (e.g., 10% of overlay width) */
+  height: 1px; /* Thickness of the line */
+  transform: translate(-50%, -50%); /* Center the line */
+}
+
+#scope-overlay::after { /* Vertical line */
+  left: 50%;
+  top: 50%; /* Start from center */
+  width: 1px; /* Thickness of the line */
+  height: 10%; /* Length of the line (e.g., 10% of overlay height) */
+  transform: translate(-50%, -50%); /* Center the line */
+}
+
+
+canvas {
+  display: block; /* Prevents scrollbars */
+}
+
+#webrtc-signaling-panel {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 600px;
+  padding: 20px;
+  background-color: rgba(20, 20, 20, 0.9);
+  border: 1px solid #444;
+  border-radius: 8px;
+  z-index: 15; /* Above game, potentially below instruction overlay if that's active */
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+  display: none; /* Initially hidden */
+  color: #eee;
+}
+
+#webrtc-signaling-panel h2 {
+  margin-top: 0;
+  color: #4CAF50;
+  text-align: center;
+}
+
+#webrtc-signaling-panel div {
+  margin-bottom: 10px;
+}
+
+#webrtc-signaling-panel label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 0.9em;
+}
+
+/* Base style for all textareas in the panel */
+#webrtc-signaling-panel textarea {
+  padding: 5px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #2a2a2a;
+  color: #ddd;
+  font-size: 0.8em;
+  min-height: 40px;
+  width: calc(100% - 12px); /* Default width, includes padding */
+  box-sizing: border-box; /* Ensure padding doesn't add to width */
+}
+
+/* Styling for the input group containing textarea and copy button */
+.input-group {
+  display: flex;
+  width: 100%;
+  align-items: flex-start; /* Aligns button with the top of the textarea */
+  /* margin-bottom is handled by the parent div if this is nested */
+}
+
+/* Override width for textareas within an input-group */
+#webrtc-signaling-panel .input-group textarea {
+  flex-grow: 1; /* Textarea takes available space */
+  width: auto; /* Let flexbox control the width */
+  margin-right: 8px; /* Space between textarea and button */
+}
+
+#webrtc-signaling-panel button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  font-size: 0.9em;
+  cursor: pointer;
+  border-radius: 3px;
+  margin-right: 5px;
+  margin-top: 5px;
+}
+
+#webrtc-signaling-panel button:hover {
+  background-color: #0056b3;
+}
+
+/* Specific styling for copy buttons */
+.copy-btn {
+  /* Inherits general button styles from above */
+  flex-shrink: 0; /* Prevent button from shrinking */
+  align-self: flex-start; /* Keep button at the top, useful if textarea becomes very tall */
+  margin-top: 0; /* Align with textarea which has no top margin inside group */
+  margin-right: 0; /* Remove default right margin if it's the last element */
+}
+
+
+#p2p-status {
+  text-align: center;
+  font-weight: bold;
+  margin-bottom: 15px;
+}

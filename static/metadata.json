@@ -1,0 +1,6 @@
+{
+  "name": "Simple FPS Game",
+  "description": "A basic First-Person Shooter game built with Three.js and Gemini API (placeholder, API not used in game logic)",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
