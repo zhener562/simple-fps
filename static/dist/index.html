@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"> 
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple FPS Game</title>
+
+  <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "react": "https://esm.sh/react@^19.1.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.2.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "three/": "https://cdn.jsdelivr.net/npm/three@0.160.0/"
+  }
+}
+</script>
+  <script type="module" crossorigin src="/assets/index-CRkEl7Ie.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-B5slrkpI.css">
+</head>
+<body>
+  <div id="main-menu">
+    <h1>Simple FPS Game</h1>
+    <button id="start-singleplayer">Single Player</button>
+    <button id="start-multiplayer">Multiplayer (P2P Concept)</button>
+
+    <!-- New Map Selection Section -->
+    <div id="map-selection-container">
+      <h3>Select Map:</h3>
+      <div id="map-options">
+        <button id="map-arena-btn" class="map-select-btn">Arena</button>
+        <button id="map-urban-btn" class="map-select-btn">Urban</button>
+        <button id="map-forest-btn" class="map-select-btn">Forest</button>
+        <button id="map-random-btn" class="map-select-btn selected-map">Random</button>
+      </div>
+    </div>
+    <!-- End of New Map Selection Section -->
+
+    <div class="instructions-preview">
+      <p>W, A, S, D to move</p>
+      <p>Mouse to look</p>
+      <p>Left Click to shoot</p>
+      <p>Right Click or Left Shift to Aim</p>
+      <p>1 for Handgun, 2 for Sniper Rifle, 3 for SMG</p>
+    </div>
+  </div>
+
+  <div id="instruction-overlay" style="display: none;">
+    <div id="instruction-text" style="font-size: 32px; font-weight: bold;">Click to Start</div>
+    <p>W, A, S, D to move | Mouse to look</p>
+    <p>Left Click to shoot | Right Click or Left Shift to Aim</p>
+    <p>1 for Handgun, 2 for Sniper Rifle, 3 for SMG</p>
+    <p id="p2p-instruction" style="display:none; margin-top: 10px; font-size: 16px;">Use P2P controls below to connect, then click to start.</p>
+  </div>
+
+  <div id="scope-overlay"></div> <!-- Added scope overlay div -->
+
+  <div id="game-container"></div>
+
+  <div id="webrtc-signaling-panel" style="display: none;">
+    <h2>P2P Connection Setup (Manual)</h2>
+    <p id="p2p-status">Status: Disconnected</p>
+    <div>
+      <button id="create-offer-btn">1. Create Offer (Player 1)</button>
+      <button id="create-answer-btn">3. Create Answer (Player 2, after pasting offer)</button>
+    </div>
+    <div>
+      <label for="local-sdp">Your Session Description (Copy this):</label>
+      <div class="input-group">
+        <textarea id="local-sdp" rows="5" readonly></textarea>
+        <button id="copy-local-sdp-btn" class="copy-btn">Copy</button>
+      </div>
+    </div>
+    <div>
+      <label for="remote-sdp">Remote Session Description (Paste here):</label>
+      <textarea id="remote-sdp" rows="5"></textarea>
+      <button id="set-remote-sdp-btn">2/4. Set Remote Description</button>
+    </div>
+    <div>
+      <label for="local-ice">Your ICE Candidates (Copy these as they appear):</label>
+      <div class="input-group">
+        <textarea id="local-ice" rows="4" readonly></textarea>
+        <button id="copy-local-ice-btn" class="copy-btn">Copy</button>
+      </div>
+    </div>
+    <div>
+      <label for="remote-ice">Remote ICE Candidate (Paste one by one):</label>
+      <textarea id="remote-ice" rows="2"></textarea>
+      <button id="add-remote-ice-btn">Add Remote ICE Candidate</button>
+    </div>
+     <button id="close-signaling-btn" style="margin-top:10px;">Close Panel (if connected)</button>
+  </div>
+
+</body>
+</html>

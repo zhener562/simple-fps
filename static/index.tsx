@@ -156,6 +156,13 @@ const copyLocalIceBtn = document.getElementById('copy-local-ice-btn') as HTMLBut
 let peerConnection: RTCPeerConnection | null = null;
 let dataChannel: RTCDataChannel | null = null;
 
+// WebSocket Signaling Variables
+let signalingSocket: WebSocket | null = null;
+let clientId: string | null = null;
+let currentRoom: string | null = null;
+let isWaitingForOpponent = false;
+let matchmakingTimeout: number | null = null;
+
 const FALLBACK_STUN_SERVERS: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -406,6 +413,245 @@ function showTemporaryMessage(message: string, duration: number = 2000) {
     }, duration);
 }
 
+// WebSocket Signaling Functions
+function connectToSignalingServer(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signalingSocket && signalingSocket.readyState === WebSocket.OPEN) {
+            resolve();
+            return;
+        }
+
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        
+        signalingSocket = new WebSocket(wsUrl);
+        
+        signalingSocket.onopen = () => {
+            console.log('Connected to signaling server');
+            if (p2pStatusText) p2pStatusText.textContent = 'Status: Connected to server';
+            resolve();
+        };
+        
+        signalingSocket.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                handleSignalingMessage(message);
+            } catch (error) {
+                console.error('Error parsing signaling message:', error);
+            }
+        };
+        
+        signalingSocket.onclose = () => {
+            console.log('Disconnected from signaling server');
+            if (p2pStatusText) p2pStatusText.textContent = 'Status: Disconnected';
+            signalingSocket = null;
+            clientId = null;
+        };
+        
+        signalingSocket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            reject(error);
+        };
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+            if (signalingSocket && signalingSocket.readyState !== WebSocket.OPEN) {
+                reject(new Error('Connection timeout'));
+            }
+        }, 10000);
+    });
+}
+
+function handleSignalingMessage(message: any) {
+    console.log('Received signaling message:', message);
+    
+    switch (message.msg_type) {
+        case 'welcome':
+            clientId = message.data.client_id;
+            console.log('Assigned client ID:', clientId);
+            break;
+            
+        case 'user-joined':
+            console.log('User joined room:', message.data);
+            if (isWaitingForOpponent && message.sender !== clientId) {
+                // Store the opponent's client ID for targeting messages
+                const opponentId = message.sender;
+                startAutomaticPeerConnection(true, opponentId); // We become the offer creator
+            }
+            break;
+            
+        case 'offer':
+            if (message.sender !== clientId) {
+                handleRemoteOffer(message.data, message.sender);
+            }
+            break;
+            
+        case 'answer':
+            if (message.sender !== clientId) {
+                handleRemoteAnswer(message.data);
+            }
+            break;
+            
+        case 'ice-candidate':
+            if (message.sender !== clientId) {
+                handleRemoteIceCandidate(message.data);
+            }
+            break;
+    }
+}
+
+function joinRoom(roomId: string) {
+    if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+        console.error('Not connected to signaling server');
+        return;
+    }
+    
+    currentRoom = roomId;
+    isWaitingForOpponent = true;
+    
+    const joinMessage = {
+        msg_type: 'join-room',
+        data: { room_id: roomId },
+        target: null,
+        sender: clientId
+    };
+    
+    signalingSocket.send(JSON.stringify(joinMessage));
+    console.log('Joined room:', roomId);
+    
+    if (p2pStatusText) p2pStatusText.textContent = `Status: Waiting for opponent in room ${roomId}`;
+    
+    // Set timeout for matchmaking
+    if (matchmakingTimeout) clearTimeout(matchmakingTimeout);
+    matchmakingTimeout = window.setTimeout(() => {
+        if (isWaitingForOpponent) {
+            console.log('Matchmaking timeout, starting game with default settings');
+            if (p2pStatusText) p2pStatusText.textContent = 'Status: Timeout, starting solo';
+            // Fall back to single player or try another room
+        }
+    }, 30000); // 30 second timeout
+}
+
+// Add opponent tracking variable
+let opponentClientId: string | null = null;
+
+async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOpponentId?: string) {
+    try {
+        if (targetOpponentId) {
+            opponentClientId = targetOpponentId;
+        }
+        
+        await initPeerConnection();
+        
+        if (shouldCreateOffer) {
+            isPlayerOne = true;
+            await createAutomaticOffer();
+        } else {
+            isPlayerOne = false;
+        }
+        
+        isWaitingForOpponent = false;
+        if (matchmakingTimeout) {
+            clearTimeout(matchmakingTimeout);
+            matchmakingTimeout = null;
+        }
+        
+    } catch (error) {
+        console.error('Error in automatic peer connection:', error);
+        if (p2pStatusText) p2pStatusText.textContent = 'Status: Connection failed';
+    }
+}
+
+async function createAutomaticOffer() {
+    if (!peerConnection) {
+        console.error('Peer connection not initialized');
+        return;
+    }
+    
+    try {
+        // Create data channel for game communication
+        console.log("Creating data channel 'gameData'.");
+        dataChannel = peerConnection.createDataChannel("gameData");
+        setupDataChannelEvents();
+        
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        
+        // Send offer through signaling server
+        if (signalingSocket && currentRoom) {
+            const offerMessage = {
+                msg_type: 'offer',
+                data: offer,
+                target: opponentClientId, // Target specific opponent
+                sender: clientId
+            };
+            signalingSocket.send(JSON.stringify(offerMessage));
+            console.log('Sent automatic offer to', opponentClientId);
+        }
+        
+    } catch (error) {
+        console.error('Error creating automatic offer:', error);
+    }
+}
+
+async function handleRemoteOffer(offer: RTCSessionDescriptionInit, senderId: string) {
+    if (!peerConnection) {
+        opponentClientId = senderId; // Store opponent ID
+        await initPeerConnection();
+        isPlayerOne = false;
+    }
+    
+    try {
+        await peerConnection!.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection!.createAnswer();
+        await peerConnection!.setLocalDescription(answer);
+        
+        // Send answer through signaling server
+        if (signalingSocket) {
+            const answerMessage = {
+                msg_type: 'answer',
+                data: answer,
+                target: senderId,
+                sender: clientId
+            };
+            signalingSocket.send(JSON.stringify(answerMessage));
+            console.log('Sent automatic answer to', senderId);
+        }
+        
+    } catch (error) {
+        console.error('Error handling remote offer:', error);
+    }
+}
+
+async function handleRemoteAnswer(answer: RTCSessionDescriptionInit) {
+    if (!peerConnection) {
+        console.error('Peer connection not found when handling answer');
+        return;
+    }
+    
+    try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log('Set remote answer successfully');
+    } catch (error) {
+        console.error('Error handling remote answer:', error);
+    }
+}
+
+async function handleRemoteIceCandidate(candidateData: any) {
+    if (!peerConnection) {
+        console.error('Peer connection not found when handling ICE candidate');
+        return;
+    }
+    
+    try {
+        const candidate = new RTCIceCandidate(candidateData);
+        await peerConnection.addIceCandidate(candidate);
+        console.log('Added remote ICE candidate');
+    } catch (error) {
+        console.error('Error adding remote ICE candidate:', error);
+    }
+}
+
 function initializeApp() {
   if (!mainMenuDiv || !instructionOverlay || !gameContainer || !startSinglePlayerButton || !startMultiplayerButton || !signalingPanel || !localSdpTextarea || !remoteSdpTextarea || !localIceTextarea || !remoteIceTextarea || !p2pStatusText || !scopeOverlay || !copyLocalSdpBtn || !copyLocalIceBtn) {
     console.error("Required UI elements not found!");
@@ -420,11 +666,35 @@ function initializeApp() {
     startGame();
   });
 
-  startMultiplayerButton.addEventListener('click', () => {
+  startMultiplayerButton.addEventListener('click', async () => {
     gameMode = 'multiplayer';
-    if (signalingPanel) signalingPanel.style.display = 'block';
-    if (p2pInstructionText) p2pInstructionText.style.display = 'block';
-    startGame();
+    
+    try {
+      if (p2pStatusText) p2pStatusText.textContent = 'Status: Connecting to server...';
+      
+      await connectToSignalingServer();
+      
+      // Generate a room ID based on map selection and timestamp
+      const roomPrefix = selectedMapType === 'random' ? 'any' : selectedMapType.toString();
+      const roomId = `${roomPrefix}_${Math.floor(Date.now() / 10000)}`; // Changes every 10 seconds
+      
+      joinRoom(roomId);
+      
+      // Hide manual P2P panel and show automatic status
+      if (signalingPanel) signalingPanel.style.display = 'none';
+      if (p2pInstructionText) p2pInstructionText.style.display = 'none';
+      
+      startGame();
+      
+    } catch (error) {
+      console.error('Failed to connect to signaling server:', error);
+      if (p2pStatusText) p2pStatusText.textContent = 'Status: Connection failed, using manual mode';
+      
+      // Fall back to manual P2P mode
+      if (signalingPanel) signalingPanel.style.display = 'block';
+      if (p2pInstructionText) p2pInstructionText.style.display = 'block';
+      startGame();
+    }
   });
 
   createOfferBtn.addEventListener('click', createOffer);
@@ -969,18 +1239,31 @@ function initThreeJSGame() {
   gameContainer.appendChild(renderer.domElement);
 
   controls = new PointerLockControls(camera, renderer.domElement);
-  pitchObject = camera.parent as THREE.Object3D;
+  
+  // Wait for next frame to ensure PointerLockControls internal structure is ready
+  setTimeout(() => {
+    pitchObject = camera.parent as THREE.Object3D;
 
-  if (!(pitchObject && pitchObject instanceof THREE.Object3D && pitchObject.parent === controls.getObject())) {
-    console.warn("Primary method for pitchObject (camera.parent) failed or structure unexpected. Trying fallback.");
-    const yawObjectFallback = controls.getObject();
-    if (yawObjectFallback && yawObjectFallback.children && yawObjectFallback.children.length > 0 && yawObjectFallback.children[0] instanceof THREE.Object3D) {
-        pitchObject = yawObjectFallback.children[0] as THREE.Object3D;
-        console.log("Used fallback (controls.getObject().children[0]) for pitchObject.");
-    } else {
-        console.error("CRITICAL: Both methods to get pitchObject failed. Camera recoil and aiming will be affected.");
+    if (!(pitchObject && pitchObject instanceof THREE.Object3D && pitchObject.parent === controls.getObject())) {
+      console.warn("Primary method for pitchObject (camera.parent) failed or structure unexpected. Trying fallback.");
+      const yawObjectFallback = controls.getObject();
+      if (yawObjectFallback && yawObjectFallback.children && yawObjectFallback.children.length > 0 && yawObjectFallback.children[0] instanceof THREE.Object3D) {
+          pitchObject = yawObjectFallback.children[0] as THREE.Object3D;
+          console.log("Used fallback (controls.getObject().children[0]) for pitchObject.");
+      } else {
+          console.error("CRITICAL: Both methods to get pitchObject failed. Camera recoil and aiming will be affected.");
+          // Create a fallback pitch object as last resort
+          pitchObject = new THREE.Object3D();
+          pitchObject.add(camera);
+          controls.getObject().add(pitchObject);
+          console.log("Created fallback pitchObject and added camera to it.");
+      }
     }
-  }
+    
+    if (pitchObject) {
+      console.log("Successfully initialized pitchObject");
+    }
+  }, 0);
 
 
   if (instructionOverlay) {
@@ -1513,8 +1796,22 @@ async function initPeerConnection() {
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
             console.log("Local ICE candidate gathered:", event.candidate);
+            
+            // Add to manual UI for fallback
             if (localIceTextarea) {
                 localIceTextarea.value += JSON.stringify(event.candidate) + '\n';
+            }
+            
+            // Send automatically through WebSocket signaling
+            if (signalingSocket && signalingSocket.readyState === WebSocket.OPEN && currentRoom) {
+                const candidateMessage = {
+                    msg_type: 'ice-candidate',
+                    data: event.candidate,
+                    target: opponentClientId, // Target specific opponent
+                    sender: clientId
+                };
+                signalingSocket.send(JSON.stringify(candidateMessage));
+                console.log('Sent ICE candidate automatically to', opponentClientId);
             }
         } else {
             console.log("Local ICE candidate gathering complete (event.candidate is null).");
