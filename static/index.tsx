@@ -676,7 +676,7 @@ function initializeApp() {
       
       // Generate a room ID based on map selection and timestamp
       const roomPrefix = selectedMapType === 'random' ? 'any' : selectedMapType.toString();
-      const roomId = `${roomPrefix}_${Math.floor(Date.now() / 10000)}`; // Changes every 10 seconds
+      const roomId = `${roomPrefix}_${Math.floor(Date.now() / 60000)}`; // Changes every 60 seconds
       
       joinRoom(roomId);
       
