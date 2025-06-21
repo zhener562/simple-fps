@@ -347,6 +347,24 @@ function determineMapType(seedForChoice: number, selection: MapType | 'random'):
  * Selects a random spawn point from a list, with optional conditions.
  * Uses the global 'prng' for randomness.
  */
+function isSpawnPointSafe(position: THREE.Vector3): boolean {
+    // Create a collision box around the spawn position
+    const spawnCollider = new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(position.x, position.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, position.z),
+        new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
+    );
+    
+    // Check collision with all map features
+    for (const feature of mapFeatures) {
+        const featureBoundingBox = new THREE.Box3().setFromObject(feature);
+        if (spawnCollider.intersectsBox(featureBoundingBox)) {
+            return false; // Collision detected
+        }
+    }
+    
+    return true; // Safe position
+}
+
 function selectRandomSpawnPoint(
     points: THREE.Vector3[],
     referencePosition?: THREE.Vector3,
@@ -383,12 +401,40 @@ function selectRandomSpawnPoint(
         });
     }
 
-    if (filteredByDistance.length > 0) {
-        return filteredByDistance[prng.nextInt(0, filteredByDistance.length - 1)].clone();
-    } else if (candidatePoints.length > 0) {
-        return candidatePoints[prng.nextInt(0, candidatePoints.length - 1)].clone();
-    } else { // Should be unreachable if points.length > 0 initially
-        return points[prng.nextInt(0, points.length-1)].clone();
+    // Filter points by safety (no collision with map objects)
+    let safePoints: THREE.Vector3[] = [];
+    const pointsToCheck = filteredByDistance.length > 0 ? filteredByDistance : candidatePoints;
+    
+    for (const point of pointsToCheck) {
+        if (isSpawnPointSafe(point)) {
+            safePoints.push(point);
+        }
+    }
+    
+    // If no safe points found in filtered points, check all candidate points
+    if (safePoints.length === 0 && filteredByDistance.length > 0) {
+        for (const point of candidatePoints) {
+            if (isSpawnPointSafe(point)) {
+                safePoints.push(point);
+            }
+        }
+    }
+    
+    // If still no safe points, check all original points
+    if (safePoints.length === 0) {
+        for (const point of points) {
+            if (isSpawnPointSafe(point)) {
+                safePoints.push(point);
+            }
+        }
+    }
+    
+    // Return a safe point if available, otherwise fallback to center with warning
+    if (safePoints.length > 0) {
+        return safePoints[prng.nextInt(0, safePoints.length - 1)].clone();
+    } else {
+        console.warn('No safe spawn points found! Using fallback position.');
+        return new THREE.Vector3(0, PLAYER_HEIGHT + 5, 0); // Spawn above center as emergency fallback
     }
 }
 
