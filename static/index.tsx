@@ -2724,6 +2724,49 @@ function updateProjectiles(delta: number) {
              });
         }
     }
+    
+    // Check collision with map features (walls, obstacles, buildings)
+    if (!hitSomething) {
+        for (const feature of mapFeatures) {
+            const featureBoundingBox = new THREE.Box3().setFromObject(feature);
+            
+            // Expand the bounding box slightly to ensure collision detection
+            const expansion = PROJECTILE_RADIUS;
+            featureBoundingBox.expandByScalar(expansion);
+            
+            // Check if projectile intersects with the feature
+            let intersectsThisFrame = false;
+            if (projectileSegmentLength >= 0.0001) {
+                const hitFeaturePoint = _projectileCollisionRay.intersectBox(featureBoundingBox, _projectileIntersectionPoint);
+                if (hitFeaturePoint && oldPosition.distanceTo(hitFeaturePoint) <= projectileSegmentLength) {
+                    intersectsThisFrame = true;
+                }
+            }
+            
+            if (intersectsThisFrame || featureBoundingBox.containsPoint(p.mesh.position)) {
+                hitSomething = true;
+                break;
+            }
+        }
+    }
+    
+    // Check collision with ground
+    if (!hitSomething && groundMesh) {
+        const groundBoundingBox = new THREE.Box3().setFromObject(groundMesh);
+        
+        // Check if projectile hits the ground
+        let intersectsGround = false;
+        if (projectileSegmentLength >= 0.0001) {
+            const hitGroundPoint = _projectileCollisionRay.intersectBox(groundBoundingBox, _projectileIntersectionPoint);
+            if (hitGroundPoint && oldPosition.distanceTo(hitGroundPoint) <= projectileSegmentLength) {
+                intersectsGround = true;
+            }
+        }
+        
+        if (intersectsGround || groundBoundingBox.containsPoint(p.mesh.position)) {
+            hitSomething = true;
+        }
+    }
 
     if (hitSomething) {
         scene.remove(p.mesh); if(p.mesh.geometry) p.mesh.geometry.dispose();
@@ -2736,6 +2779,9 @@ function updateRemoteProjectiles(delta: number) {
     if (!scene) return;
     for (let i = remoteProjectiles.length - 1; i >= 0; i--) {
         const p = remoteProjectiles[i];
+        
+        const oldPosition = p.mesh.position.clone();
+        
         // Apply gravity to remote projectiles as well
         p.velocity.y -= GRAVITY * delta;
         
@@ -2743,6 +2789,60 @@ function updateRemoteProjectiles(delta: number) {
         p.lifeTime += delta;
 
         if (p.lifeTime > PROJECTILE_LIFETIME) {
+            scene.remove(p.mesh); if(p.mesh.geometry) p.mesh.geometry.dispose();
+            remoteProjectiles.splice(i, 1);
+            continue;
+        }
+        
+        // Check collision with map features for remote projectiles
+        let hitSomething = false;
+        
+        // Setup collision ray
+        _projectileCollisionRay.origin.copy(oldPosition);
+        _projectileCollisionRay.direction.copy(p.mesh.position).sub(oldPosition);
+        const projectileSegmentLength = _projectileCollisionRay.direction.length();
+        
+        if (projectileSegmentLength >= 0.0001) {
+            _projectileCollisionRay.direction.normalize();
+        }
+        
+        // Check collision with map features
+        for (const feature of mapFeatures) {
+            const featureBoundingBox = new THREE.Box3().setFromObject(feature);
+            featureBoundingBox.expandByScalar(PROJECTILE_RADIUS);
+            
+            let intersectsThisFrame = false;
+            if (projectileSegmentLength >= 0.0001) {
+                const hitFeaturePoint = _projectileCollisionRay.intersectBox(featureBoundingBox, _projectileIntersectionPoint);
+                if (hitFeaturePoint && oldPosition.distanceTo(hitFeaturePoint) <= projectileSegmentLength) {
+                    intersectsThisFrame = true;
+                }
+            }
+            
+            if (intersectsThisFrame || featureBoundingBox.containsPoint(p.mesh.position)) {
+                hitSomething = true;
+                break;
+            }
+        }
+        
+        // Check collision with ground
+        if (!hitSomething && groundMesh) {
+            const groundBoundingBox = new THREE.Box3().setFromObject(groundMesh);
+            
+            let intersectsGround = false;
+            if (projectileSegmentLength >= 0.0001) {
+                const hitGroundPoint = _projectileCollisionRay.intersectBox(groundBoundingBox, _projectileIntersectionPoint);
+                if (hitGroundPoint && oldPosition.distanceTo(hitGroundPoint) <= projectileSegmentLength) {
+                    intersectsGround = true;
+                }
+            }
+            
+            if (intersectsGround || groundBoundingBox.containsPoint(p.mesh.position)) {
+                hitSomething = true;
+            }
+        }
+        
+        if (hitSomething) {
             scene.remove(p.mesh); if(p.mesh.geometry) p.mesh.geometry.dispose();
             remoteProjectiles.splice(i, 1);
         }
