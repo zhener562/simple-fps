@@ -191,9 +191,76 @@ body, html {
   display: none;
 }
 
-#ammo-counter.reloading {
+#ammo-text {
+  font-family: monospace;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+#reload-progress-container {
+  margin-top: 8px;
+  width: 100%;
+}
+
+#reload-progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+#reload-progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #ffaa00 0%, #ff6600 100%);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+  width: var(--progress, 0%);
+}
+
+#reload-text {
+  font-family: monospace;
+  font-size: 14px;
+  font-weight: bold;
   color: #ffaa00;
-  border-color: rgba(255, 170, 0, 0.5);
+  text-align: center;
+  margin-top: 4px;
+  text-shadow: 0 0 5px rgba(255, 170, 0, 0.5);
+  animation: reloadTextPulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes reloadTextPulse {
+  0% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 8px rgba(255, 170, 0, 0.8);
+  }
+}
+
+
+@keyframes weaponReloadMotion {
+  0% {
+    transform: translateY(0) rotateX(0deg);
+  }
+  25% {
+    transform: translateY(-20px) rotateX(-15deg);
+  }
+  50% {
+    transform: translateY(-30px) rotateX(-20deg);
+  }
+  75% {
+    transform: translateY(-20px) rotateX(-10deg);
+  }
+  100% {
+    transform: translateY(0) rotateX(0deg);
+  }
 }
 
 canvas {

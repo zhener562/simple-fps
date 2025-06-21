@@ -120,6 +120,8 @@ let lastFireTime = 0;
 let currentAmmo: Record<string, number> = {}; // Current ammo for each weapon
 let isReloading = false;
 let reloadStartTime = 0;
+let weaponReloadOffset = new THREE.Vector3(); // Reload animation offset
+let weaponReloadTime = 0; // Time elapsed in reload animation
 
 let activeWeaponRecoilOffset = new THREE.Vector3(); // Current positional recoil of weapon model
 let cameraPitchRecoil = 0; // Current camera pitch recoil value (radians)
@@ -1251,19 +1253,37 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
 
 
 function updateAmmoDisplay() {
-    const ammoCounter = document.getElementById('ammo-counter');
-    if (!ammoCounter) return;
+    const ammoText = document.getElementById('ammo-text');
+    const reloadProgressContainer = document.getElementById('reload-progress-container');
+    const reloadProgressBar = document.getElementById('reload-progress-bar');
+    
+    if (!ammoText || !reloadProgressContainer || !reloadProgressBar) return;
     
     if (isReloading) {
-        ammoCounter.textContent = 'RELOADING...';
-        ammoCounter.classList.add('reloading');
+        // Hide ammo text, show progress bar
+        ammoText.style.display = 'none';
+        reloadProgressContainer.style.display = 'block';
+        
+        // Calculate reload progress
+        const currentWeaponStats = weaponStatsDB[currentEquippedWeapon];
+        if (currentWeaponStats && currentWeaponStats.reloadTime) {
+            const elapsed = performance.now() - reloadStartTime;
+            const progress = Math.min(elapsed / currentWeaponStats.reloadTime, 1.0);
+            const progressPercent = Math.round(progress * 100);
+            
+            // Update progress bar width
+            reloadProgressBar.style.setProperty('--progress', `${progressPercent}%`);
+        }
     } else {
+        // Show ammo text, hide progress bar
+        ammoText.style.display = 'block';
+        reloadProgressContainer.style.display = 'none';
+        
         const currentWeaponStats = weaponStatsDB[currentEquippedWeapon];
         const currentAmmoCount = currentAmmo[currentEquippedWeapon] || 0;
         const maxAmmo = currentWeaponStats?.magazineCapacity || 0;
         
-        ammoCounter.textContent = `${currentAmmoCount}/${maxAmmo}`;
-        ammoCounter.classList.remove('reloading');
+        ammoText.textContent = `${currentAmmoCount}/${maxAmmo}`;
     }
 }
 
@@ -2700,6 +2720,25 @@ function updateWeaponDynamics(delta: number) {
     weaponModel.position.y -= activeWeaponRecoilOffset.y; 
     weaponModel.position.z -= activeWeaponRecoilOffset.z; 
   }
+  
+  // RELOAD ANIMATION
+  if (isReloading && stats.reloadTime) {
+    weaponReloadTime += delta;
+    const reloadProgress = Math.min(weaponReloadTime / (stats.reloadTime / 1000), 1.0);
+    
+    // Create smooth reload motion curve
+    const reloadCurve = Math.sin(reloadProgress * Math.PI);
+    const downwardCurve = Math.sin(reloadProgress * Math.PI * 2) * 0.5; // Double frequency for down-up motion
+    
+    weaponReloadOffset.y = -0.25 * reloadCurve; // Move weapon down
+    weaponReloadOffset.z = 0.15 * downwardCurve; // Move weapon back and forth
+    weaponReloadOffset.x = Math.sin(reloadProgress * Math.PI * 3) * 0.05; // Slight side wobble
+    
+    weaponModel.position.add(weaponReloadOffset);
+  } else if (!isReloading) {
+    weaponReloadTime = 0;
+    weaponReloadOffset.set(0, 0, 0);
+  }
 }
 
 
@@ -2789,6 +2828,8 @@ function animate() {
                 // Reload complete
                 currentAmmo[currentEquippedWeapon] = currentWeaponStats.magazineCapacity || 0;
                 isReloading = false;
+                weaponReloadTime = 0; // Reset reload animation timer
+                weaponReloadOffset.set(0, 0, 0); // Reset reload animation offset
             }
         }
     }
