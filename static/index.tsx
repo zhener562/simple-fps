@@ -69,7 +69,8 @@ const PLAYER_HEIGHT = 1.8;
 const PLAYER_RADIUS = 0.4;
 const MOVEMENT_SPEED = 5.0 * 1.5; // Increased movement speed
 const PROJECTILE_LIFETIME = 2.0; 
-const PROJECTILE_RADIUS = 0.08; 
+const PROJECTILE_RADIUS = 0.08;
+const GRAVITY = 9.8; // Gravity acceleration (m/s²) 
 
 const projectileGeometry = new THREE.SphereGeometry(PROJECTILE_RADIUS, 8, 8);
 const handgunProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -2542,6 +2543,11 @@ function updateProjectiles(delta: number) {
     const p = projectiles[i];
     
     const oldPosition = p.mesh.position.clone();
+    
+    // Apply gravity to velocity (negative Y direction)
+    p.velocity.y -= GRAVITY * delta;
+    
+    // Update position with modified velocity
     p.mesh.position.addScaledVector(p.velocity, delta);
     p.lifeTime += delta;
 
@@ -2628,6 +2634,9 @@ function updateRemoteProjectiles(delta: number) {
     if (!scene) return;
     for (let i = remoteProjectiles.length - 1; i >= 0; i--) {
         const p = remoteProjectiles[i];
+        // Apply gravity to remote projectiles as well
+        p.velocity.y -= GRAVITY * delta;
+        
         p.mesh.position.addScaledVector(p.velocity, delta);
         p.lifeTime += delta;
 
