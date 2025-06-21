@@ -3056,12 +3056,48 @@ function animate() {
     const intendedMove = new THREE.Vector3();
     intendedMove.x = velocity.x * delta; intendedMove.z = velocity.z * delta;
     const originalPosition = playerObject.position.clone();
+    
+    // Try X movement first
     playerObject.translateX(intendedMove.x);
     playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS*2 , PLAYER_RADIUS * 2) );
-    for (const feature of mapFeatures) { const featureBox = new THREE.Box3().setFromObject(feature); if (playerCollider.intersectsBox(featureBox)) { playerObject.position.x = originalPosition.x; velocity.x = 0; break; } }
+    for (const feature of mapFeatures) { 
+        const featureBox = new THREE.Box3().setFromObject(feature); 
+        if (playerCollider.intersectsBox(featureBox)) { 
+            playerObject.position.x = originalPosition.x; 
+            velocity.x = 0; 
+            break; 
+        } 
+    }
+    
+    // Try Z movement
     playerObject.translateZ(intendedMove.z);
     playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT- PLAYER_RADIUS*2, PLAYER_RADIUS * 2) );
-    for (const feature of mapFeatures) { const featureBox = new THREE.Box3().setFromObject(feature); if (playerCollider.intersectsBox(featureBox)) { playerObject.position.z = originalPosition.z; velocity.z = 0; break; } }
+    for (const feature of mapFeatures) { 
+        const featureBox = new THREE.Box3().setFromObject(feature); 
+        if (playerCollider.intersectsBox(featureBox)) { 
+            playerObject.position.z = originalPosition.z; 
+            velocity.z = 0; 
+            break; 
+        } 
+    }
+    
+    // Final combined movement check to prevent corner clipping
+    const finalCollider = new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z),
+        new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
+    );
+    
+    for (const feature of mapFeatures) {
+        const featureBox = new THREE.Box3().setFromObject(feature);
+        if (finalCollider.intersectsBox(featureBox)) {
+            // Revert to original position if final position causes collision
+            playerObject.position.x = originalPosition.x;
+            playerObject.position.z = originalPosition.z;
+            velocity.x = 0;
+            velocity.z = 0;
+            break;
+        }
+    }
     const rayOrigin = playerObject.position.clone(); rayOrigin.y += PLAYER_HEIGHT * 0.5;
     const rayDirection = new THREE.Vector3(0, -1, 0);
     const groundRaycaster = new THREE.Raycaster(rayOrigin, rayDirection, 0, PLAYER_HEIGHT * 2);
