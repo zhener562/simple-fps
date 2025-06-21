@@ -244,6 +244,22 @@ body, html {
   }
 }
 
+#zeroing-display {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  color: white;
+  font-family: monospace;
+  font-size: 16px;
+  font-weight: bold;
+  background-color: rgba(0, 0, 0, 0.5);
+  padding: 6px 10px;
+  border-radius: 5px;
+  z-index: 1000;
+  pointer-events: none;
+  border: 2px solid rgba(0, 255, 255, 0.3);
+  display: none;
+}
 
 @keyframes weaponReloadMotion {
   0% {

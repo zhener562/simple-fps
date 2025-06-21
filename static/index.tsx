@@ -109,6 +109,7 @@ interface WeaponStats {
     adsSpreadMultiplier?: number; // Factor to reduce spreadAngle when ADS (e.g., 0.3 for 30%)
     magazineCapacity: number; // Maximum bullets in magazine
     reloadTime: number; // Time in milliseconds to reload
+    zeroingDistance?: number; // Zeroing distance in meters (for sniper rifles)
 }
 
 let weaponStatsDB: Record<string, Partial<WeaponStats>> = {}; // Will be populated after models are created
@@ -119,6 +120,7 @@ const ADS_TRANSITION_SPEED = 10.0;
 let currentEquippedWeapon: 'handgun' | 'sniper' | 'smg' = 'handgun';
 let lastFireTime = 0;
 let currentAmmo: Record<string, number> = {}; // Current ammo for each weapon
+let sniperZeroingDistance = 100; // Current zeroing distance for sniper rifle (meters)
 let isReloading = false;
 let reloadStartTime = 0;
 let weaponReloadOffset = new THREE.Vector3(); // Reload animation offset
@@ -1169,7 +1171,8 @@ function populateWeaponStatsDB() {
             muzzlePoint: sniperMuzzlePoint,
             damage: PLAYER_MAX_HEALTH,
             magazineCapacity: 5,
-            reloadTime: 2500, 
+            reloadTime: 2500,
+            zeroingDistance: 100, // Default 100m zeroing 
         },
         smg: {
             hipPosition: new THREE.Vector3(0.25, -0.18, -0.45),
@@ -1250,6 +1253,17 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     if (scopeOverlay) {
         scopeOverlay.style.display = 'none'; 
     }
+    
+    // Show/hide zeroing display based on weapon type
+    const zeroingDisplay = document.getElementById('zeroing-display');
+    if (zeroingDisplay) {
+        if (weaponType === 'sniper') {
+            zeroingDisplay.style.display = 'block';
+            zeroingDisplay.textContent = `${sniperZeroingDistance}m`;
+        } else {
+            zeroingDisplay.style.display = 'none';
+        }
+    }
 }
 
 
@@ -1285,6 +1299,33 @@ function updateAmmoDisplay() {
         const maxAmmo = currentWeaponStats?.magazineCapacity || 0;
         
         ammoText.textContent = `${currentAmmoCount}/${maxAmmo}`;
+    }
+}
+
+function calculateZeroingAngle(distance: number, velocity: number): number {
+    // Calculate the angle needed to hit a target at given distance
+    // Using simplified ballistics formula: angle = arctan(g * distance / velocity^2)
+    const g = GRAVITY;
+    const v = velocity;
+    const d = distance;
+    
+    // For small angles, we can use the approximation
+    const angle = Math.atan((g * d) / (v * v));
+    return angle;
+}
+
+function adjustZeroing(adjustment: number) {
+    if (currentEquippedWeapon === 'sniper') {
+        sniperZeroingDistance = Math.max(50, Math.min(300, sniperZeroingDistance + adjustment));
+        
+        // Update zeroing display
+        const zeroingDisplay = document.getElementById('zeroing-display');
+        if (zeroingDisplay) {
+            zeroingDisplay.textContent = `${sniperZeroingDistance}m`;
+        }
+        
+        // Show temporary message with new zeroing distance
+        showTemporaryMessage(`Zeroing: ${sniperZeroingDistance}m`);
     }
 }
 
@@ -2398,6 +2439,8 @@ function onKeyDown(event: KeyboardEvent) {
     case 'Digit2': queueInput(() => equipWeapon('sniper')); break;
     case 'Digit3': queueInput(() => equipWeapon('smg')); break;
     case 'KeyR': queueInput(() => startReload()); break;
+    case 'PageUp': queueInput(() => adjustZeroing(25)); break; // Increase zeroing distance
+    case 'PageDown': queueInput(() => adjustZeroing(-25)); break; // Decrease zeroing distance
   }
 }
 function onKeyUp(event: KeyboardEvent) { 
@@ -2516,6 +2559,19 @@ function spawnProjectileInternal(muzzlePos: THREE.Vector3, projDir: THREE.Vector
         finalProjDir.addScaledVector(camUp, offsetY);
         finalProjDir.normalize();
     }
+  }
+  
+  // Apply zeroing adjustment for sniper rifle
+  if (weaponType === 'sniper' && stats.projectileSpeed) {
+    const zeroingAngle = calculateZeroingAngle(sniperZeroingDistance, stats.projectileSpeed);
+    
+    // Apply upward angle adjustment to compensate for bullet drop
+    const camQuaternion = camera.quaternion.clone();
+    const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camQuaternion);
+    
+    // Rotate the direction vector upward by the zeroing angle
+    finalProjDir.addScaledVector(camUp, Math.sin(zeroingAngle));
+    finalProjDir.normalize();
   }
 
   const projectileMesh = new THREE.Mesh(projectileGeometry, stats.projectileMaterial);
