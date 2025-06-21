@@ -272,17 +272,22 @@ const urbanObstacleMaterial = new THREE.MeshStandardMaterial({ color: 0x546E7A, 
 const forestTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.1 });
 const forestFoliageMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.8, metalness: 0.0 });
 const forestRockMaterial = new THREE.MeshStandardMaterial({ color: 0x696969, roughness: 0.9, metalness: 0.2 });
+const plainsRockMaterial = new THREE.MeshStandardMaterial({ color: 0x8B7355, roughness: 0.8, metalness: 0.1 }); // Sandy brown
+const plainsGrassMaterial = new THREE.MeshStandardMaterial({ color: 0x9ACD32, roughness: 0.9, metalness: 0.0 }); // Yellow green
+const plainsTreeMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8, metalness: 0.1 }); // Saddle brown
 
 
 let groundMesh: THREE.Mesh;
 const ARENA_GROUND_COLOR = 0x283747;
 const URBAN_GROUND_COLOR = 0x424242; 
-const FOREST_GROUND_COLOR = 0x556B2F; 
+const FOREST_GROUND_COLOR = 0x556B2F;
+const PLAINS_GROUND_COLOR = 0x6B8E23; // Olive drab for grasslands
 
 enum MapType {
     ARENA,
     URBAN,
-    FOREST
+    FOREST,
+    PLAINS
 }
 let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
@@ -335,9 +340,10 @@ function determineMapType(seedForChoice: number, selection: MapType | 'random'):
     if (selection === 'random') {
         const tempPrng = new PRNG(seedForChoice); // Use the provided seed for a temporary PRNG
         const randVal = tempPrng.next();
-        if (randVal < 0.3333) return MapType.ARENA;
-        if (randVal < 0.6666) return MapType.URBAN;
-        return MapType.FOREST;
+        if (randVal < 0.25) return MapType.ARENA;
+        if (randVal < 0.50) return MapType.URBAN;
+        if (randVal < 0.75) return MapType.FOREST;
+        return MapType.PLAINS;
     }
     return selection as MapType;
 }
@@ -800,10 +806,11 @@ function initializeApp() {
   const mapArenaButton = document.getElementById('map-arena-btn') as HTMLButtonElement;
   const mapUrbanButton = document.getElementById('map-urban-btn') as HTMLButtonElement;
   const mapForestButton = document.getElementById('map-forest-btn') as HTMLButtonElement;
+  const mapPlainsButton = document.getElementById('map-plains-btn') as HTMLButtonElement;
   const mapRandomButton = document.getElementById('map-random-btn') as HTMLButtonElement;
-  const mapSelectionButtons = [mapArenaButton, mapUrbanButton, mapForestButton, mapRandomButton];
+  const mapSelectionButtons = [mapArenaButton, mapUrbanButton, mapForestButton, mapPlainsButton, mapRandomButton];
 
-  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapRandomButton) {
+  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapRandomButton) {
       console.error("Map selection buttons not found!");
   } else {
       function updateSelectedMapButton(selectedBtn: HTMLButtonElement) {
@@ -824,6 +831,10 @@ function initializeApp() {
       mapForestButton.addEventListener('click', () => {
           selectedMapType = MapType.FOREST;
           updateSelectedMapButton(mapForestButton);
+      });
+      mapPlainsButton.addEventListener('click', () => {
+          selectedMapType = MapType.PLAINS;
+          updateSelectedMapButton(mapPlainsButton);
       });
       mapRandomButton.addEventListener('click', () => {
           selectedMapType = 'random';
@@ -938,6 +949,7 @@ function resetGameScene() {
         let groundColor = ARENA_GROUND_COLOR;
         if (currentMapType === MapType.URBAN) groundColor = URBAN_GROUND_COLOR;
         else if (currentMapType === MapType.FOREST) groundColor = FOREST_GROUND_COLOR;
+        else if (currentMapType === MapType.PLAINS) groundColor = PLAINS_GROUND_COLOR;
         groundMesh.material.color.setHex(groundColor);
     }
 
@@ -950,6 +962,10 @@ function resetGameScene() {
             scene.fog.color.setHex(0x2F4F2F); 
             scene.fog.near = 0;
             scene.fog.far = 120; 
+        } else if (currentMapType === MapType.PLAINS) {
+            scene.fog.color.setHex(0x87CEEB); // Light sky blue
+            scene.fog.near = 0;
+            scene.fog.far = 800; // Very far for long-range sniping
         } else { 
             scene.fog.color.setHex(0x87ceeb); 
             scene.fog.near = 0;
@@ -1778,6 +1794,115 @@ function generateForestMap() {
     }
 }
 
+function generatePlainsMap() {
+    if (!prng) { console.error("PlainsMap: PRNG not initialized!"); return; }
+    
+    // Large 1km x 1km plains (500 units radius = 1km diameter)
+    const plainsBounds = { minX: -500, maxX: 500, minZ: -500, maxZ: 500 };
+    
+    // Create rolling hills using elevation points
+    const numHills = prng.nextInt(8, 15);
+    for (let i = 0; i < numHills; i++) {
+        const hillRadius = prng.randFloat(15, 40);
+        const hillHeight = prng.randFloat(3, 12);
+        const hillGeometry = new THREE.SphereGeometry(hillRadius, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5);
+        const hill = new THREE.Mesh(hillGeometry, plainsGrassMaterial);
+        
+        hill.position.x = prng.randFloat(plainsBounds.minX + hillRadius, plainsBounds.maxX - hillRadius);
+        hill.position.y = 0;
+        hill.position.z = prng.randFloat(plainsBounds.minZ + hillRadius, plainsBounds.maxZ - hillRadius);
+        hill.scale.y = hillHeight / hillRadius;
+        
+        hill.castShadow = true;
+        hill.receiveShadow = true;
+        hill.name = `plains_hill_${i}`;
+        scene.add(hill);
+        mapFeatures.push(hill);
+    }
+    
+    // Sparse rock formations for cover
+    const numRockFormations = prng.nextInt(12, 20);
+    for (let i = 0; i < numRockFormations; i++) {
+        const rockGroup = new THREE.Group();
+        rockGroup.name = `plains_rocks_${i}`;
+        
+        const numRocksInFormation = prng.nextInt(2, 6);
+        for (let j = 0; j < numRocksInFormation; j++) {
+            const rockSize = prng.randFloat(1.5, 4.5);
+            const rockHeight = prng.randFloat(rockSize * 0.8, rockSize * 2.0);
+            const rockGeometry = new THREE.BoxGeometry(rockSize, rockHeight, rockSize * prng.randFloat(0.7, 1.3));
+            const rock = new THREE.Mesh(rockGeometry, plainsRockMaterial);
+            
+            rock.position.x = prng.randFloat(-6, 6);
+            rock.position.y = rockHeight / 2;
+            rock.position.z = prng.randFloat(-6, 6);
+            rock.rotation.y = prng.randFloat(0, Math.PI * 2);
+            
+            rock.castShadow = true;
+            rock.receiveShadow = true;
+            rock.name = `plains_rock_${i}_${j}`;
+            rockGroup.add(rock);
+        }
+        
+        rockGroup.position.x = prng.randFloat(plainsBounds.minX, plainsBounds.maxX);
+        rockGroup.position.z = prng.randFloat(plainsBounds.minZ, plainsBounds.maxZ);
+        
+        scene.add(rockGroup);
+        mapFeatures.push(rockGroup);
+    }
+    
+    // Scattered individual trees for long-range reference points
+    const numTrees = prng.nextInt(8, 15);
+    for (let i = 0; i < numTrees; i++) {
+        const treeGroup = new THREE.Group();
+        treeGroup.name = `plains_tree_${i}`;
+        
+        const trunkHeight = prng.randFloat(8, 16);
+        const trunkRadius = prng.randFloat(0.4, 1.0);
+        const trunkGeometry = new THREE.CylinderGeometry(trunkRadius, trunkRadius * 0.9, trunkHeight, 12);
+        const trunk = new THREE.Mesh(trunkGeometry, plainsTreeMaterial);
+        trunk.position.y = trunkHeight / 2;
+        trunk.castShadow = true;
+        trunk.receiveShadow = true;
+        treeGroup.add(trunk);
+        
+        // Large canopy for long-distance visibility
+        const canopyRadius = prng.randFloat(trunkRadius * 4, trunkRadius * 7);
+        const canopyGeometry = new THREE.SphereGeometry(canopyRadius, 12, 8);
+        const canopy = new THREE.Mesh(canopyGeometry, plainsGrassMaterial);
+        canopy.position.y = trunkHeight + canopyRadius * 0.5;
+        canopy.scale.y = 0.6; // Flatten slightly
+        canopy.castShadow = true;
+        canopy.receiveShadow = true;
+        treeGroup.add(canopy);
+        
+        treeGroup.position.x = prng.randFloat(plainsBounds.minX, plainsBounds.maxX);
+        treeGroup.position.z = prng.randFloat(plainsBounds.minZ, plainsBounds.maxZ);
+        
+        scene.add(treeGroup);
+        mapFeatures.push(treeGroup);
+    }
+    
+    // Small bushes and grass clumps for minor cover
+    const numVegetation = prng.nextInt(20, 35);
+    for (let i = 0; i < numVegetation; i++) {
+        const vegSize = prng.randFloat(0.8, 2.5);
+        const vegGeometry = new THREE.SphereGeometry(vegSize, 8, 6);
+        const vegetation = new THREE.Mesh(vegGeometry, plainsGrassMaterial);
+        
+        vegetation.position.x = prng.randFloat(plainsBounds.minX, plainsBounds.maxX);
+        vegetation.position.y = vegSize * 0.3;
+        vegetation.position.z = prng.randFloat(plainsBounds.minZ, plainsBounds.maxZ);
+        vegetation.scale.y = 0.4; // Make bushes low
+        
+        vegetation.castShadow = true;
+        vegetation.receiveShadow = true;
+        vegetation.name = `plains_vegetation_${i}`;
+        scene.add(vegetation);
+        mapFeatures.push(vegetation);
+    }
+}
+
 function generateMapFeatures() {
     mapFeatures.forEach(feature => {
         if (feature.parent === scene) { 
@@ -1818,6 +1943,8 @@ function generateMapFeatures() {
         generateUrbanMap();
     } else if (currentMapType === MapType.FOREST) {
         generateForestMap();
+    } else if (currentMapType === MapType.PLAINS) {
+        generatePlainsMap();
     } else { 
         generateArenaMap();
     }
@@ -1827,7 +1954,12 @@ function generateMapFeatures() {
 function createTargets() {
   if (!prng) { console.error("CreateTargets: PRNG not initialized!"); return; }
   const boxGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-  const MAX_TARGET_ATTEMPTS = 15; 
+  let MAX_TARGET_ATTEMPTS = 15;
+  
+  // Increase attempts for larger maps
+  if (currentMapType === MapType.PLAINS) {
+    MAX_TARGET_ATTEMPTS = 25; // More attempts needed for sparse large map
+  } 
   let numTargets = 40;
   let boundsMultiplier = 160; 
   let yBase = 0.75 + (prng.next() * 12); 
@@ -1840,6 +1972,10 @@ function createTargets() {
     numTargets = 45;
     boundsMultiplier = 170; 
     yBase = 0.75 + (prng.next() * 8); 
+  } else if (currentMapType === MapType.PLAINS) {
+    numTargets = 100; // More targets for the large map
+    boundsMultiplier = 900; // Cover most of the 1km x 1km area
+    yBase = 0.75 + (prng.next() * 15); // Slightly higher for visibility
   }
   console.log(`Creating ${numTargets} targets for map type ${currentMapType !== undefined ? MapType[currentMapType] : 'undefined'}`);
 
