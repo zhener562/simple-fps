@@ -106,6 +106,8 @@ interface WeaponStats {
     damage: number; // Damage dealt per hit
     spreadAngle?: number; // Max angle (radians) of deviation from center for hip fire
     adsSpreadMultiplier?: number; // Factor to reduce spreadAngle when ADS (e.g., 0.3 for 30%)
+    magazineCapacity: number; // Maximum bullets in magazine
+    reloadTime: number; // Time in milliseconds to reload
 }
 
 let weaponStatsDB: Record<string, Partial<WeaponStats>> = {}; // Will be populated after models are created
@@ -115,6 +117,9 @@ const ADS_TRANSITION_SPEED = 10.0;
 
 let currentEquippedWeapon: 'handgun' | 'sniper' | 'smg' = 'handgun';
 let lastFireTime = 0;
+let currentAmmo: Record<string, number> = {}; // Current ammo for each weapon
+let isReloading = false;
+let reloadStartTime = 0;
 
 let activeWeaponRecoilOffset = new THREE.Vector3(); // Current positional recoil of weapon model
 let cameraPitchRecoil = 0; // Current camera pitch recoil value (radians)
@@ -1137,11 +1142,13 @@ function populateWeaponStatsDB() {
             recoilDuration: 0.05,
             recoilReturnSpeed: 18,
             fireRate: 250, 
-            projectileSpeed: 130.0,
+            projectileSpeed: 250.0,
             projectileMaterial: handgunProjectileMaterial,
             model: handgunModel,
             muzzlePoint: handgunMuzzlePoint,
             damage: 1,
+            magazineCapacity: 15,
+            reloadTime: 1500,
         },
         sniper: {
             hipPosition: new THREE.Vector3(0.3, -0.22, -0.6), 
@@ -1153,11 +1160,13 @@ function populateWeaponStatsDB() {
             recoilDuration: 0.15,
             recoilReturnSpeed: 12, 
             fireRate: 1500, 
-            projectileSpeed: 500.0,
+            projectileSpeed: 850.0,
             projectileMaterial: sniperProjectileMaterial,
             model: sniperRifleModel,
             muzzlePoint: sniperMuzzlePoint,
-            damage: PLAYER_MAX_HEALTH, 
+            damage: PLAYER_MAX_HEALTH,
+            magazineCapacity: 5,
+            reloadTime: 2500, 
         },
         smg: {
             hipPosition: new THREE.Vector3(0.25, -0.18, -0.45),
@@ -1169,14 +1178,23 @@ function populateWeaponStatsDB() {
             recoilDuration: 0.06, // quick per shot
             recoilReturnSpeed: 16,
             fireRate: 100, // Fast
-            projectileSpeed: 125.0,
+            projectileSpeed: 300.0,
             projectileMaterial: smgProjectileMaterial,
             model: smgModel,
             muzzlePoint: smgMuzzlePoint,
             damage: 1,
             spreadAngle: THREE.MathUtils.degToRad(7.0), // ~7 degree cone for hip fire
             adsSpreadMultiplier: 0.45, // 45% of hip fire spread when ADS
+            magazineCapacity: 30,
+            reloadTime: 2000,
         }
+    };
+    
+    // Initialize ammo for all weapons
+    currentAmmo = {
+        'handgun': weaponStatsDB.handgun.magazineCapacity || 15,
+        'sniper': weaponStatsDB.sniper.magazineCapacity || 5,
+        'smg': weaponStatsDB.smg.magazineCapacity || 30
     };
 }
 
@@ -1215,13 +1233,57 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     isWeaponRecoiling = false;
     weaponRecoilTime = 0;
     activeWeaponRecoilOffset.set(0,0,0);
-    cameraPitchRecoil = 0; 
+    cameraPitchRecoil = 0;
+    
+    // Initialize ammo if not already set
+    if (Object.keys(currentAmmo).length === 0) {
+        currentAmmo = {
+            'handgun': weaponStatsDB.handgun.magazineCapacity || 15,
+            'sniper': weaponStatsDB.sniper.magazineCapacity || 5,
+            'smg': weaponStatsDB.smg.magazineCapacity || 30
+        };
+    } 
 
     if (scopeOverlay) {
         scopeOverlay.style.display = 'none'; 
     }
 }
 
+
+function updateAmmoDisplay() {
+    const ammoCounter = document.getElementById('ammo-counter');
+    if (!ammoCounter) return;
+    
+    if (isReloading) {
+        ammoCounter.textContent = 'RELOADING...';
+        ammoCounter.classList.add('reloading');
+    } else {
+        const currentWeaponStats = weaponStatsDB[currentEquippedWeapon];
+        const currentAmmoCount = currentAmmo[currentEquippedWeapon] || 0;
+        const maxAmmo = currentWeaponStats?.magazineCapacity || 0;
+        
+        ammoCounter.textContent = `${currentAmmoCount}/${maxAmmo}`;
+        ammoCounter.classList.remove('reloading');
+    }
+}
+
+function startReload() {
+    if (isReloading || isGameOver) return;
+    
+    const currentWeaponStats = weaponStatsDB[currentEquippedWeapon];
+    if (!currentWeaponStats || !currentWeaponStats.magazineCapacity || !currentWeaponStats.reloadTime) return;
+    
+    // Check if reload is needed
+    if (currentAmmo[currentEquippedWeapon] >= currentWeaponStats.magazineCapacity) return;
+    
+    isReloading = true;
+    reloadStartTime = performance.now();
+    
+    // Stop SMG auto-fire during reload
+    if (currentEquippedWeapon === 'smg') {
+        isFiringSMGActual = false;
+    }
+}
 
 function initThreeJSGame() {
   if (isGameInitialized) return;
@@ -1278,12 +1340,26 @@ function initThreeJSGame() {
       if (isGameOver) return;
       instructionOverlay.style.display = 'none';
       if (gameMode === 'multiplayer' && signalingPanel) signalingPanel.style.display = 'none';
+      
+      // Show ammo counter when gameplay starts
+      const ammoCounter = document.getElementById('ammo-counter');
+      if (ammoCounter) {
+        ammoCounter.style.display = 'block';
+        updateAmmoDisplay();
+      }
+      
       prevTime = performance.now(); pendingInputs.length = 0;
       isFiringSMGActual = false; // Ensure SMG is not firing when locking controls initially
     });
     controls.addEventListener('unlock', () => {
       if (isGameOver) return;
       instructionOverlay.style.display = 'flex';
+      
+      // Hide ammo counter when returning to menu
+      const ammoCounter = document.getElementById('ammo-counter');
+      if (ammoCounter) {
+        ammoCounter.style.display = 'none';
+      }
       if (gameMode === 'multiplayer' && signalingPanel && (!dataChannel || dataChannel.readyState !== 'open')) {
            signalingPanel.style.display = 'block';
       }
@@ -2300,6 +2376,7 @@ function onKeyDown(event: KeyboardEvent) {
     case 'Digit1': queueInput(() => equipWeapon('handgun')); break;
     case 'Digit2': queueInput(() => equipWeapon('sniper')); break;
     case 'Digit3': queueInput(() => equipWeapon('smg')); break;
+    case 'KeyR': queueInput(() => startReload()); break;
   }
 }
 function onKeyUp(event: KeyboardEvent) { 
@@ -2341,10 +2418,18 @@ function onMouseDown(event: MouseEvent) {
           const muzzleWorldPosition = new THREE.Vector3();
           currentWpnStats.muzzlePoint!.getWorldPosition(muzzleWorldPosition);
           
+          // Check ammo and reload state before shooting
+          if (currentAmmo[currentEquippedWeapon] <= 0 || isReloading) {
+            return; // No ammo or reloading, can't shoot
+          }
+          
           const projectileDirection = new THREE.Vector3();
           camera.getWorldDirection(projectileDirection);
 
           spawnProjectileInternal(muzzleWorldPosition, projectileDirection.clone(), currentEquippedWeapon);
+          
+          // Consume ammo
+          currentAmmo[currentEquippedWeapon]--;
           
           if (gameMode === 'multiplayer') {
             const shootEventData: GameEventShootData = {
@@ -2666,10 +2751,19 @@ function animate() {
             const muzzleWorldPosition = new THREE.Vector3();
             smgStats.muzzlePoint!.getWorldPosition(muzzleWorldPosition);
             
+            // Check ammo and reload state before shooting
+            if (currentAmmo['smg'] <= 0 || isReloading) {
+                isFiringSMGActual = false; // Stop auto-fire when out of ammo or reloading
+                return;
+            }
+            
             const projectileDirection = new THREE.Vector3();
             camera.getWorldDirection(projectileDirection);
 
             spawnProjectileInternal(muzzleWorldPosition, projectileDirection.clone(), 'smg');
+            
+            // Consume ammo
+            currentAmmo['smg']--;
             
             if (gameMode === 'multiplayer') {
                 const shootEventData: GameEventShootData = {
@@ -2686,7 +2780,18 @@ function animate() {
             }
         }
     }
-
+    
+    // Handle reload timing
+    if (isReloading) {
+        const currentWeaponStats = weaponStatsDB[currentEquippedWeapon];
+        if (currentWeaponStats && currentWeaponStats.reloadTime) {
+            if (time - reloadStartTime >= currentWeaponStats.reloadTime) {
+                // Reload complete
+                currentAmmo[currentEquippedWeapon] = currentWeaponStats.magazineCapacity || 0;
+                isReloading = false;
+            }
+        }
+    }
 
     const playerObject = controls.getObject(); 
     const currentSpeed = MOVEMENT_SPEED * ((isAimingWithKeyActual || isAimingWithMouseActual) ? 0.6 : 1.0);
@@ -2737,6 +2842,8 @@ function animate() {
   updateWeaponDynamics(delta); 
   updateProjectiles(delta);
   if (gameMode === 'multiplayer') updateRemoteProjectiles(delta);
+  
+  updateAmmoDisplay();
 
   renderer.render(scene, camera);
 }
