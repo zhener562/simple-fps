@@ -68,7 +68,7 @@ let isFiringSMGActual = false;
 const PLAYER_HEIGHT = 1.8;
 const PLAYER_RADIUS = 0.4;
 const MOVEMENT_SPEED = 5.0 * 1.5; // Increased movement speed
-const PROJECTILE_LIFETIME = 2.0; 
+const PROJECTILE_LIFETIME = 5.0; 
 const PROJECTILE_RADIUS = 0.08;
 const GRAVITY = 9.8; // Gravity acceleration (m/s²) 
 
