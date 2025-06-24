@@ -24,7 +24,20 @@ class PRNG {
     }
 }
 let prng: PRNG | null = null; // Default PRNG, will be re-seeded for games
+let spawnPrng: PRNG | null = null; // Spawn-specific PRNG with offset seed
 let currentMapSeed: number | null = null;
+
+// Spawn randomization constants
+const SPAWN_SEED_OFFSET_P1 = 12345; // Player 1 spawn seed offset
+const SPAWN_SEED_OFFSET_P2 = 54321; // Player 2 spawn seed offset (different for unique spawns)
+
+// Get player-specific spawn seed offset
+function getSpawnSeedOffset(): number {
+    if (gameMode === 'singleplayer') {
+        return SPAWN_SEED_OFFSET_P1; // Use P1 offset for single player
+    }
+    return isPlayerOne ? SPAWN_SEED_OFFSET_P1 : SPAWN_SEED_OFFSET_P2;
+}
 
 
 let scene: THREE.Scene;
@@ -286,35 +299,51 @@ let lastSentStateTime = 0;
 const STATE_SEND_INTERVAL = 1000 / 20;
 let isPlayerOne: boolean | null = null;
 
-const defaultSpawnPoints: THREE.Vector3[] = [
-    new THREE.Vector3(0, PLAYER_HEIGHT, 70),    // North field
-    new THREE.Vector3(0, PLAYER_HEIGHT, -70),   // South field
-    new THREE.Vector3(70, PLAYER_HEIGHT, 0),    // East field
-    new THREE.Vector3(-70, PLAYER_HEIGHT, 0),   // West field
-    new THREE.Vector3(50, PLAYER_HEIGHT, -50),  // Southeast
-    new THREE.Vector3(-50, PLAYER_HEIGHT, 50),  // Northwest
-    new THREE.Vector3(-50, PLAYER_HEIGHT, -50), // Southwest
-    new THREE.Vector3(50, PLAYER_HEIGHT, 50),   // Northeast
-    new THREE.Vector3(0, PLAYER_HEIGHT, 0),     // Center (less ideal for start)
-];
+// Get map scale based on map type
+function getMapScale(): number {
+    switch (currentMapType) {
+        case MapType.ARENA:
+            return 160;
+        case MapType.URBAN:
+            return 190;
+        case MapType.FOREST:
+            return 170;
+        case MapType.PLAINS:
+            return 900;
+        case MapType.MOUNTAIN:
+            return 200;
+        default:
+            return 160;
+    }
+}
 
-const mountainSpawnPoints: THREE.Vector3[] = [
-    new THREE.Vector3(0, PLAYER_HEIGHT, 70),    // North - height will be adjusted to terrain
-    new THREE.Vector3(0, PLAYER_HEIGHT, -70),   // South - height will be adjusted to terrain
-    new THREE.Vector3(70, PLAYER_HEIGHT, 0),    // East - height will be adjusted to terrain
-    new THREE.Vector3(-70, PLAYER_HEIGHT, 0),   // West - height will be adjusted to terrain
-    new THREE.Vector3(50, PLAYER_HEIGHT, -50),  // Southeast - height will be adjusted to terrain
-    new THREE.Vector3(-50, PLAYER_HEIGHT, 50),  // Northwest - height will be adjusted to terrain
-    new THREE.Vector3(-50, PLAYER_HEIGHT, -50), // Southwest - height will be adjusted to terrain
-    new THREE.Vector3(50, PLAYER_HEIGHT, 50),   // Northeast - height will be adjusted to terrain
-    new THREE.Vector3(0, PLAYER_HEIGHT, 0),     // Center - height will be adjusted to terrain
-];
+// Generate random spawn position within map bounds
+function generateRandomSpawnPosition(): THREE.Vector3 {
+    if (!spawnPrng) {
+        console.warn("generateRandomSpawnPosition called before spawn PRNG initialized");
+        return new THREE.Vector3(0, PLAYER_HEIGHT, 0);
+    }
+    
+    const scale = getMapScale();
+    const maxRange = scale * 0.8; // Use 80% of map scale as spawnable area
+    
+    // Generate random X and Z coordinates within the map bounds
+    const x = spawnPrng.randFloat(-maxRange, maxRange);
+    const z = spawnPrng.randFloat(-maxRange, maxRange);
+    
+    return new THREE.Vector3(x, PLAYER_HEIGHT, z);
+}
 
 function getSpawnPointsForCurrentMap(): THREE.Vector3[] {
-    if (currentMapType === MapType.MOUNTAIN) {
-        return mountainSpawnPoints;
+    // Generate multiple random spawn candidates for selection
+    const spawnPoints: THREE.Vector3[] = [];
+    const numCandidates = 20; // Generate 20 random candidates
+    
+    for (let i = 0; i < numCandidates; i++) {
+        spawnPoints.push(generateRandomSpawnPosition());
     }
-    return defaultSpawnPoints;
+    
+    return spawnPoints;
 }
 
 // Function to detect terrain height at given X,Z coordinates
@@ -480,8 +509,8 @@ function selectRandomSpawnPoint(
     minDistance?: number,
     pointToExclude?: THREE.Vector3
 ): THREE.Vector3 {
-    if (!prng) { // Should not happen if game logic is correct, but as a safeguard
-        console.warn("selectRandomSpawnPoint called before PRNG initialized. Using temporary PRNG.");
+    if (!spawnPrng) { // Should not happen if game logic is correct, but as a safeguard
+        console.warn("selectRandomSpawnPoint called before spawn PRNG initialized. Using temporary PRNG.");
         const tempPrng = new PRNG(Date.now());
         return points[tempPrng.nextInt(0, points.length - 1)]?.clone() || new THREE.Vector3(0, PLAYER_HEIGHT, 0);
     }
@@ -540,7 +569,7 @@ function selectRandomSpawnPoint(
     
     // Return a safe point if available, otherwise fallback to center with warning
     if (safePoints.length > 0) {
-        const selectedPoint = safePoints[prng.nextInt(0, safePoints.length - 1)].clone();
+        const selectedPoint = safePoints[spawnPrng.nextInt(0, safePoints.length - 1)].clone();
         return adjustSpawnPointToTerrain(selectedPoint);
     } else {
         console.warn('No safe spawn points found! Using fallback position.');
@@ -966,6 +995,7 @@ function startGame() {
     currentMapSeed = Date.now(); 
     currentMapType = determineMapType(currentMapSeed, selectedMapType);
     prng = new PRNG(currentMapSeed); 
+    spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset());
     console.log(`SP Start: Seed=${currentMapSeed}, Type=${currentMapType}, Selected=${selectedMapType}`);
   } else if (gameMode === 'multiplayer') {
     instructionText.textContent = "Connect via P2P, then Click to Start";
@@ -1033,6 +1063,7 @@ function resetGameScene() {
             currentMapSeed = currentMapSeed ?? Date.now(); 
             currentMapType = determineMapType(currentMapSeed, selectedMapType); 
             prng = new PRNG(currentMapSeed); 
+            spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset()); 
         } else if (currentMapType === undefined || currentMapType === null) { 
              console.warn("SP resetGameScene: currentMapType missing, but PRNG/seed exists. Re-determining map type.");
              currentMapType = determineMapType(currentMapSeed!, selectedMapType); 
@@ -1051,6 +1082,7 @@ function resetGameScene() {
         currentMapSeed = Date.now();
         currentMapType = determineMapType(currentMapSeed, 'random'); 
         prng = new PRNG(currentMapSeed);
+        spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset());
     }
     console.log(`Resetting scene with: Mode=${gameMode}, Seed=${currentMapSeed}, Type=${currentMapType}, PRNG Valid: ${!!prng}`);
     if (prng) console.log(`PRNG Next (consumed for log): ${prng.next()}`);
@@ -1161,13 +1193,8 @@ function resetGameScene() {
 
       if (gameMode === 'multiplayer') {
           const currentSpawnPoints = getSpawnPointsForCurrentMap();
-          if (isPlayerOne === true && currentSpawnPoints.length > 0) {
-              localPlayerSpawnPoint = adjustSpawnPointToTerrain(currentSpawnPoints[0]);
-          } else if (isPlayerOne === false && currentSpawnPoints.length > 1) {
-              localPlayerSpawnPoint = adjustSpawnPointToTerrain(currentSpawnPoints[1]);
-          } else { 
-              localPlayerSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
-          }
+          // Use random spawn points for both players instead of fixed positions
+          localPlayerSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints);
       } else { 
           const currentSpawnPoints = getSpawnPointsForCurrentMap();
           localPlayerSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
@@ -2608,13 +2635,20 @@ function setupMultiplayerSceneElements() {
   
   let remoteSpawnPos: THREE.Vector3;
   const currentSpawnPoints = getSpawnPointsForCurrentMap();
-   if (isPlayerOne === true && currentSpawnPoints.length > 1) { 
-        remoteSpawnPos = adjustSpawnPointToTerrain(currentSpawnPoints[1]);
-    } else if (isPlayerOne === false && currentSpawnPoints.length > 0) { 
-        remoteSpawnPos = adjustSpawnPointToTerrain(currentSpawnPoints[0]);
-    } else { 
-        remoteSpawnPos = selectRandomSpawnPoint(currentSpawnPoints.slice(2)); 
-    }
+  
+  // Get local player position to avoid overlap
+  const localPlayerPosition = controls ? controls.getObject().position : new THREE.Vector3(0, PLAYER_HEIGHT, 0);
+  
+  // Select random spawn point for remote player, avoiding local player position
+  // Scale minimum distance based on map size for better competitive balance
+  const mapScale = getMapScale();
+  const minDistance = Math.max(50, mapScale * 0.15); // At least 50 units, or 15% of map scale
+  
+  remoteSpawnPos = selectRandomSpawnPoint(
+    currentSpawnPoints, 
+    localPlayerPosition, 
+    minDistance
+  );
   remotePlayerMesh.position.set(remoteSpawnPos.x, remoteSpawnPos.y, remoteSpawnPos.z); 
 
   remotePlayerMesh.castShadow = true; remotePlayerMesh.receiveShadow = true;
@@ -2735,6 +2769,7 @@ function setupDataChannelEvents() {
             currentMapSeed = Date.now();
             currentMapType = determineMapType(currentMapSeed, selectedMapType);
             prng = new PRNG(currentMapSeed); 
+            spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset()); 
 
             console.log("P1: Sending map seed:", currentMapSeed, "and map type:", currentMapType);
             sendGameEvent({
@@ -2815,6 +2850,7 @@ function setupDataChannelEvents() {
                     currentMapSeed = seedData.seed;
                     currentMapType = seedData.mapType; 
                     prng = new PRNG(currentMapSeed!); 
+                    spawnPrng = new PRNG(currentMapSeed! + getSpawnSeedOffset()); 
                     console.log("P2: Received and set map seed:", currentMapSeed, "and map type:", currentMapType);
                     resetGameScene(); 
                 }
@@ -3119,10 +3155,14 @@ function triggerRespawn() {
         const remotePlayerWorldPosition = new THREE.Vector3();
         remotePlayerMesh.getWorldPosition(remotePlayerWorldPosition); 
         
+        // Scale minimum distance based on map size for better competitive balance
+        const mapScale = getMapScale();
+        const minDistance = Math.max(50, mapScale * 0.15); // At least 50 units, or 15% of map scale
+        
         newSpawnPoint = selectRandomSpawnPoint( 
             currentSpawnPoints,
             remotePlayerWorldPosition, 
-            50 
+            minDistance 
         );
     } else {
         newSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
