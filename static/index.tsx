@@ -72,6 +72,27 @@ let isOnGround = true;
 let verticalVelocity = 0;
 let horizontalVelocity = new THREE.Vector3(); // Persistent horizontal momentum
 
+// Health system
+const MAX_HEALTH = 100;
+let currentHealth = MAX_HEALTH;
+let lastDamageTime = 0;
+let lastMovementTime = 0;
+let isRegeneratingHealth = false;
+let isMoving = false;
+
+// Health system constants
+const MOVEMENT_HEALTH_DRAIN_RATE = 5; // HP per second lost while moving when injured
+const HEALTH_REGEN_DELAY = 5000; // 5 seconds delay before regeneration starts
+const HEALTH_REGEN_RATE = 10; // HP per second regeneration rate
+
+// Movement speed based on health constants
+const MIN_MOVEMENT_SPEED_MULTIPLIER = 0.2; // Minimum 20% movement speed when critically injured
+const MAX_MOVEMENT_SPEED_MULTIPLIER = 1.0; // Maximum 100% movement speed when healthy
+const AIMING_SPEED_MULTIPLIER = 0.6; // Movement speed reduction when aiming (60% of normal speed)
+const SPEED_REDUCTION_SEVERITY_THRESHOLD = 60; // Speed percentage threshold for red color warning
+const SPEED_REDUCTION_WARNING_THRESHOLD = 80; // Speed percentage threshold for yellow color warning
+
+
 
 const PLAYER_HEIGHT = 1.8;
 const PLAYER_RADIUS = 0.4;
@@ -373,7 +394,7 @@ let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
 
 
-const PLAYER_MAX_HEALTH = 3;
+const PLAYER_MAX_HEALTH = 100; // Changed to 100 HP system
 const KILLS_TO_WIN = 3;
 let playerHealth = PLAYER_MAX_HEALTH;
 let myScore = 0;
@@ -396,6 +417,7 @@ interface GameEventShootData {
 
 interface GameEventHitOpponentData {
     damageDealt: number;
+    isHeadshot?: boolean;
 }
 
 interface GameEventGameOverData {
@@ -997,6 +1019,7 @@ function resetP2PState() {
 
 function resetGameScene() {
     playerHealth = PLAYER_MAX_HEALTH;
+    currentHealth = MAX_HEALTH; // Also reset new health system
     myScore = 0;
     opponentScore = 0;
     isGameOver = false;
@@ -1327,7 +1350,7 @@ function populateWeaponStatsDB() {
             projectileMaterial: handgunProjectileMaterial,
             model: handgunModel,
             muzzlePoint: handgunMuzzlePoint,
-            damage: 1,
+            damage: 25, // Adjusted for 100 HP system (4 shots to kill)
             magazineCapacity: 15,
             reloadTime: 1500,
         },
@@ -1345,7 +1368,7 @@ function populateWeaponStatsDB() {
             projectileMaterial: sniperProjectileMaterial,
             model: sniperRifleModel,
             muzzlePoint: sniperMuzzlePoint,
-            damage: PLAYER_MAX_HEALTH,
+            damage: 75, // Reduced damage, headshot x2 = 150 for instakill
             magazineCapacity: 5,
             reloadTime: 2500,
             zeroingDistance: 100, // Default 100m zeroing 
@@ -1364,7 +1387,7 @@ function populateWeaponStatsDB() {
             projectileMaterial: smgProjectileMaterial,
             model: smgModel,
             muzzlePoint: smgMuzzlePoint,
-            damage: 1,
+            damage: 20, // Adjusted for 100 HP system (5 shots to kill)
             spreadAngle: THREE.MathUtils.degToRad(7.0), // ~7 degree cone for hip fire
             adsSpreadMultiplier: 0.45, // 45% of hip fire spread when ADS
             magazineCapacity: 30,
@@ -2823,22 +2846,42 @@ function setupDataChannelEvents() {
                 else if (gameEvent.type === 'hit_opponent') {
                     if(isGameOver) return;
                     const hitData = gameEvent.data as GameEventHitOpponentData;
-                    playerHealth -= hitData.damageDealt;
+                    
+                    // Use the new health system
+                    takeDamage(hitData.damageDealt);
 
                     const hitOverlay = document.createElement('div');
                     hitOverlay.style.position = 'absolute'; hitOverlay.style.top = '0'; hitOverlay.style.left = '0';
                     hitOverlay.style.width = '100%'; hitOverlay.style.height = '100%';
-                    hitOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)'; hitOverlay.style.zIndex = '1000';
+                    
+                    // Different visual feedback for headshots
+                    if (hitData.isHeadshot) {
+                        hitOverlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Yellow for headshot
+                    } else {
+                        hitOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)'; // Red for body shot
+                    }
+                    
+                    hitOverlay.style.zIndex = '1000';
                     document.body.appendChild(hitOverlay);
                     setTimeout(() => { if (document.body.contains(hitOverlay)) document.body.removeChild(hitOverlay); }, 150);
-                    showTemporaryMessage(`HIT! Health: ${playerHealth}`, 1500);
+                    
+                    // Different messages for headshots
+                    const hitMessage = hitData.isHeadshot 
+                        ? `HEADSHOT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`
+                        : `HIT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`;
+                    showTemporaryMessage(hitMessage, 2000);
 
-                    if (playerHealth <= 0) {
+                    // Update playerHealth to sync with new system
+                    playerHealth = Math.round(currentHealth);
+
+                    if (currentHealth <= 0) {
                         opponentScore++;
                         sendGameEvent({ type: 'i_was_defeated' });
                         if (opponentScore >= KILLS_TO_WIN) {
                             handleGameOver(false); 
                         } else {
+                            // Reset both health systems
+                            currentHealth = MAX_HEALTH;
                             playerHealth = PLAYER_MAX_HEALTH;
                             triggerRespawn();
                         }
@@ -3086,6 +3129,14 @@ function triggerRespawn() {
     }
     
     playerObject.position.copy(newSpawnPoint);
+    
+    // Reset health on respawn
+    currentHealth = MAX_HEALTH;
+    lastDamageTime = 0;
+    lastMovementTime = 0;
+    isRegeneratingHealth = false;
+    isMoving = false;
+    updateHealthDisplay();
     playerObject.rotation.y = 0; 
     
     if(pitchObject) {
@@ -3220,6 +3271,169 @@ function checkSlopeMovement(fromPos: THREE.Vector3, moveDir: THREE.Vector3): { c
   
   return { canMove: true }; // No obstacle detected
 }
+
+// Health management functions
+function takeDamage(amount: number): void {
+  currentHealth = Math.max(0, currentHealth - amount);
+  lastDamageTime = performance.now();
+  isRegeneratingHealth = false;
+  
+  updateHealthDisplay();
+  
+  // Note: Death handling is done in hit_opponent event processing for multiplayer
+  // and other specific contexts. This function only handles damage application.
+}
+
+// Check if player is currently moving
+function updateMovementStatus(): void {
+  const currentTime = performance.now();
+  const wasMoving = isMoving;
+  
+  // Check if any movement keys are pressed or if there's significant horizontal velocity
+  const hasMovementInput = moveForwardActual || moveBackwardActual || moveLeftActual || moveRightActual;
+  const hasVelocity = horizontalVelocity.length() > 0.1;
+  
+  isMoving = hasMovementInput || hasVelocity;
+  
+  if (isMoving) {
+    lastMovementTime = currentTime;
+  }
+  
+  // Debug info (can be removed later)
+  if (wasMoving !== isMoving) {
+    console.log(`Movement status changed: ${isMoving ? 'Moving' : 'Stopped'}`);
+  }
+}
+
+function healPlayer(amount: number): void {
+  currentHealth = Math.min(MAX_HEALTH, currentHealth + amount);
+  updateHealthDisplay();
+}
+
+function updateHealthDisplay(): void {
+  const healthContainer = document.getElementById('health-bar-container');
+  const healthFill = document.getElementById('health-bar-fill');
+  const healthText = document.getElementById('health-text');
+  const speedText = document.getElementById('speed-text');
+  
+  if (!healthContainer || !healthFill || !healthText || !speedText) return;
+  
+  // Show health bar during gameplay
+  if (controls && controls.isLocked && !isGameOver) {
+    healthContainer.style.display = 'block';
+  } else {
+    healthContainer.style.display = 'none';
+    return;
+  }
+  
+  // Update width and text
+  const healthPercentage = (currentHealth / MAX_HEALTH) * 100;
+  healthFill.style.width = `${healthPercentage}%`;
+  healthText.textContent = `${Math.round(currentHealth)}/${MAX_HEALTH}`;
+  
+  // Calculate and display movement speed
+  const healthSpeedMultiplier = Math.max(
+    MIN_MOVEMENT_SPEED_MULTIPLIER, 
+    MIN_MOVEMENT_SPEED_MULTIPLIER + ((healthPercentage / 100) * (MAX_MOVEMENT_SPEED_MULTIPLIER - MIN_MOVEMENT_SPEED_MULTIPLIER))
+  );
+  const speedPercentage = Math.round(healthSpeedMultiplier * 100);
+  speedText.textContent = `Movement: ${speedPercentage}%`;
+  
+  // Update speed text color based on speed reduction
+  if (speedPercentage <= SPEED_REDUCTION_SEVERITY_THRESHOLD) {
+    speedText.style.color = '#ff8888'; // Red for severely reduced speed
+  } else if (speedPercentage <= SPEED_REDUCTION_WARNING_THRESHOLD) {
+    speedText.style.color = '#ffff88'; // Yellow for moderately reduced speed
+  } else {
+    speedText.style.color = '#88ff88'; // Green for normal speed
+  }
+  
+  // Update color based on health level
+  healthFill.className = ''; // Clear existing classes
+  
+  if (currentHealth <= 20) {
+    healthFill.classList.add('health-critical');
+  } else if (currentHealth <= 40) {
+    healthFill.classList.add('health-low');
+  } else if (currentHealth <= 70) {
+    healthFill.classList.add('health-medium');
+  } else {
+    healthFill.classList.add('health-high');
+  }
+}
+
+function updateHealthRegeneration(deltaTime: number): void {
+  const currentTime = performance.now();
+  const timeSinceLastDamage = currentTime - lastDamageTime;
+  const timeSinceLastMovement = currentTime - lastMovementTime;
+  
+  // Only process health changes if player is injured
+  if (currentHealth < MAX_HEALTH && currentHealth > 0) {
+    
+    // If moving and injured, lose health
+    if (isMoving) {
+      const healthToLose = MOVEMENT_HEALTH_DRAIN_RATE * deltaTime;
+      currentHealth = Math.max(0, currentHealth - healthToLose);
+      isRegeneratingHealth = false;
+      
+      // Update damage time to prevent immediate regeneration
+      lastDamageTime = currentTime;
+      
+      updateHealthDisplay();
+      
+      // Check for death from movement drain
+      if (currentHealth <= 0) {
+        console.log("Player died from movement while injured");
+        // Handle death the same way as damage death
+        if (gameMode === 'multiplayer') {
+          // In multiplayer, this counts as a death
+          opponentScore++;
+          if (dataChannel && dataChannel.readyState === 'open') {
+            sendGameEvent({ type: 'i_was_defeated' });
+          }
+          if (opponentScore >= KILLS_TO_WIN) {
+            handleGameOver(false); 
+          } else {
+            currentHealth = MAX_HEALTH;
+            playerHealth = PLAYER_MAX_HEALTH;
+            triggerRespawn();
+          }
+        } else {
+          triggerGameOver();
+        }
+        return;
+      }
+    }
+    
+    // Start regenerating 5 seconds after last damage AND last movement
+    const timeSinceLastActivity = Math.max(timeSinceLastDamage, timeSinceLastMovement);
+    if (timeSinceLastActivity > HEALTH_REGEN_DELAY && !isMoving) {
+      if (!isRegeneratingHealth) {
+        isRegeneratingHealth = true;
+        console.log("Health regeneration started");
+      }
+      
+      // Regenerate health
+      const healthToRestore = HEALTH_REGEN_RATE * deltaTime;
+      currentHealth = Math.min(MAX_HEALTH, currentHealth + healthToRestore);
+      
+      updateHealthDisplay();
+      
+      // Stop regeneration when full health is reached
+      if (currentHealth >= MAX_HEALTH) {
+        isRegeneratingHealth = false;
+        console.log("Health fully regenerated");
+      }
+    } else {
+      // Not ready to regenerate yet
+      isRegeneratingHealth = false;
+    }
+  } else {
+    // At full health or dead
+    isRegeneratingHealth = false;
+  }
+}
+
 function onKeyDown(event: KeyboardEvent) { 
   if (!controls || !controls.isLocked || isGameOver) return;
   switch (event.code) {
@@ -3450,36 +3664,97 @@ function updateProjectiles(delta: number) {
     }
 
     if (!hitSomething && gameMode === 'multiplayer' && remotePlayerMesh && remotePlayerMesh.parent) { 
-        const remotePlayerBoundingBox = new THREE.Box3().setFromObject(remotePlayerMesh);
-        const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
+        let isHeadshot = false;
+        let hitSomethingThisFrame = false;
         
-        let intersectsThisFrame = false;
-        if (projectileSegmentLength >= 0.0001) {
-            const hitRemotePlayerPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
-            if (hitRemotePlayerPoint && oldPosition.distanceTo(hitRemotePlayerPoint) <= projectileSegmentLength) {
-                intersectsThisFrame = true;
+        // First, check specifically for headshot by testing individual body parts
+        // Get head mesh specifically (should be the first child with sphere geometry)
+        let headMesh: THREE.Mesh | null = null;
+        remotePlayerMesh.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.geometry instanceof THREE.SphereGeometry) {
+                headMesh = child;
+            }
+        });
+        
+        if (headMesh) {
+            // Create bounding box for head only with slight expansion
+            const headBoundingBox = new THREE.Box3().setFromObject(headMesh);
+            const expandedHeadBox = headBoundingBox.clone().expandByScalar(PLAYER_RADIUS * 0.8); // Smaller expansion for head
+            
+            // Check ray intersection with head first
+            if (projectileSegmentLength >= 0.0001) {
+                const hitHeadPoint = _projectileCollisionRay.intersectBox(expandedHeadBox, _projectileIntersectionPoint);
+                if (hitHeadPoint && oldPosition.distanceTo(hitHeadPoint) <= projectileSegmentLength) {
+                    isHeadshot = true;
+                    hitSomethingThisFrame = true;
+                }
+            }
+            
+            // Check if projectile position is inside head box
+            if (!hitSomethingThisFrame && expandedHeadBox.containsPoint(p.mesh.position)) {
+                isHeadshot = true;
+                hitSomethingThisFrame = true;
+            }
+        }
+        
+        // If no headshot, check for general body hit
+        if (!hitSomethingThisFrame) {
+            const remotePlayerBoundingBox = new THREE.Box3().setFromObject(remotePlayerMesh);
+            const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
+            
+            if (projectileSegmentLength >= 0.0001) {
+                const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
+                if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
+                    hitSomethingThisFrame = true;
+                }
+            }
+            
+            if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
+                hitSomethingThisFrame = true;
             }
         }
             
-        if (intersectsThisFrame || expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
-             const weaponStats = weaponStatsDB[p.weaponType];
-             if (weaponStats && typeof weaponStats.damage === 'number') {
-                sendGameEvent({ type: 'hit_opponent', data: { damageDealt: weaponStats.damage } as GameEventHitOpponentData });
-             } else {
-                sendGameEvent({ type: 'hit_opponent', data: { damageDealt: 1 } as GameEventHitOpponentData }); 
-             }
-             hitSomething = true;
-             remotePlayerMesh.traverse(child => {
-                 if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-                     const originalColor = (child.material as THREE.MeshStandardMaterial).color.getHex();
-                     (child.material as THREE.MeshStandardMaterial).color.setHex(0xff0000); 
-                     setTimeout(() => {
-                         if(child && child.material instanceof THREE.MeshStandardMaterial) { 
-                             (child.material as THREE.MeshStandardMaterial).color.setHex(originalColor);
-                         }
-                     }, 150);
-                 }
-             });
+        if (hitSomethingThisFrame) {
+            const weaponStats = weaponStatsDB[p.weaponType];
+            if (weaponStats && typeof weaponStats.damage === 'number') {
+                let finalDamage = weaponStats.damage;
+                if (isHeadshot) {
+                    finalDamage *= 2; // Double damage for headshots
+                }
+                sendGameEvent({ 
+                    type: 'hit_opponent', 
+                    data: { 
+                        damageDealt: finalDamage,
+                        isHeadshot: isHeadshot
+                    } as GameEventHitOpponentData 
+                });
+            } else {
+                sendGameEvent({ 
+                    type: 'hit_opponent', 
+                    data: { 
+                        damageDealt: isHeadshot ? 2 : 1,
+                        isHeadshot: isHeadshot
+                    } as GameEventHitOpponentData 
+                }); 
+            }
+            hitSomething = true;
+            
+            // Visual feedback - different colors for headshots
+            remotePlayerMesh.traverse(child => {
+                if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+                    const originalColor = (child.material as THREE.MeshStandardMaterial).color.getHex();
+                    const hitColor = isHeadshot ? 0xffff00 : 0xff0000; // Yellow for headshot, red for body
+                    (child.material as THREE.MeshStandardMaterial).color.setHex(hitColor); 
+                    setTimeout(() => {
+                        if(child && child.material instanceof THREE.MeshStandardMaterial) { 
+                            (child.material as THREE.MeshStandardMaterial).color.setHex(originalColor);
+                        }
+                    }, 150);
+                }
+            });
+            
+            // Debug output for testing
+            console.log(`Hit detected: ${isHeadshot ? 'HEADSHOT' : 'BODY SHOT'} - Damage: ${isHeadshot ? (weaponStats?.damage || 1) * 2 : (weaponStats?.damage || 1)}`);
         }
     }
     
@@ -3601,6 +3876,10 @@ function updateRemoteProjectiles(delta: number) {
                 hitSomething = true;
             }
         }
+        
+        // Note: Remote projectiles are visual only. 
+        // Actual hit detection and damage is handled by the opponent's client
+        // and communicated via hit_opponent events.
         
         if (hitSomething) {
             scene.remove(p.mesh); if(p.mesh.geometry) p.mesh.geometry.dispose();
@@ -3806,7 +4085,13 @@ function animate() {
     }
 
     const playerObject = controls.getObject(); 
-    const currentSpeed = MOVEMENT_SPEED * ((isAimingWithKeyActual || isAimingWithMouseActual) ? 0.6 : 1.0);
+    // Calculate health-based speed multiplier
+    const healthPercentage = currentHealth / MAX_HEALTH;
+    // Speed ranges from MIN_MOVEMENT_SPEED_MULTIPLIER at 0 health to MAX_MOVEMENT_SPEED_MULTIPLIER at full health
+    const healthSpeedMultiplier = MIN_MOVEMENT_SPEED_MULTIPLIER + (healthPercentage * (MAX_MOVEMENT_SPEED_MULTIPLIER - MIN_MOVEMENT_SPEED_MULTIPLIER));
+    
+    const aimingMultiplier = (isAimingWithKeyActual || isAimingWithMouseActual) ? AIMING_SPEED_MULTIPLIER : 1.0;
+    const currentSpeed = MOVEMENT_SPEED * aimingMultiplier * healthSpeedMultiplier;
     
     // Calculate input direction in world space
     direction.z = Number(moveForwardActual) - Number(moveBackwardActual);
@@ -3999,6 +4284,9 @@ function animate() {
   
   updateAmmoDisplay();
   updateEnemyCompass();
+  updateMovementStatus();
+  updateHealthRegeneration(delta);
+  updateHealthDisplay();
 
   renderer.render(scene, camera);
 }
