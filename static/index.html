@@ -34,6 +34,7 @@
         <button id="map-urban-btn" class="map-select-btn">Urban</button>
         <button id="map-forest-btn" class="map-select-btn">Forest</button>
         <button id="map-plains-btn" class="map-select-btn">Plains</button>
+        <button id="map-mountain-btn" class="map-select-btn">Mountain</button>
         <button id="map-random-btn" class="map-select-btn selected-map">Random</button>
       </div>
     </div>
@@ -69,7 +70,17 @@
     </div>
   </div> <!-- Ammo counter HUD -->
   
-  <div id="zeroing-display" style="display: none;">100m</div> <!-- Zeroing distance display -->
+  <div id="zeroing-display" style="display: none;">
+    <div id="second-zero">100m (2nd)</div>
+    <div id="first-zero">10m (1st)</div>
+  </div> <!-- Zeroing distance display -->
+
+  <div id="enemy-compass" style="display: none;">
+    <div id="compass-circle">
+      <div id="compass-arrow"></div>
+      <div id="compass-distance">0m</div>
+    </div>
+  </div> <!-- Enemy direction compass -->
 
   <div id="game-container"></div>
 

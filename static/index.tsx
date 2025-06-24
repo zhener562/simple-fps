@@ -1,6 +1,8 @@
 
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // Simple PRNG (Mulberry32)
 class PRNG {
@@ -32,6 +34,7 @@ let controls: PointerLockControls;
 let pitchObject: THREE.Object3D | undefined = undefined; // For camera pitch control
 
 const targetMeshes: Map<string, THREE.Mesh> = new Map();
+const targetBoundingBoxCache: Map<string, THREE.Box3> = new Map(); // Cache for performance
 interface Projectile {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
@@ -254,7 +257,7 @@ let lastSentStateTime = 0;
 const STATE_SEND_INTERVAL = 1000 / 20;
 let isPlayerOne: boolean | null = null;
 
-const spawnPoints: THREE.Vector3[] = [
+const defaultSpawnPoints: THREE.Vector3[] = [
     new THREE.Vector3(0, PLAYER_HEIGHT, 70),    // North field
     new THREE.Vector3(0, PLAYER_HEIGHT, -70),   // South field
     new THREE.Vector3(70, PLAYER_HEIGHT, 0),    // East field
@@ -265,7 +268,74 @@ const spawnPoints: THREE.Vector3[] = [
     new THREE.Vector3(50, PLAYER_HEIGHT, 50),   // Northeast
     new THREE.Vector3(0, PLAYER_HEIGHT, 0),     // Center (less ideal for start)
 ];
+
+const mountainSpawnPoints: THREE.Vector3[] = [
+    new THREE.Vector3(0, PLAYER_HEIGHT, 70),    // North - height will be adjusted to terrain
+    new THREE.Vector3(0, PLAYER_HEIGHT, -70),   // South - height will be adjusted to terrain
+    new THREE.Vector3(70, PLAYER_HEIGHT, 0),    // East - height will be adjusted to terrain
+    new THREE.Vector3(-70, PLAYER_HEIGHT, 0),   // West - height will be adjusted to terrain
+    new THREE.Vector3(50, PLAYER_HEIGHT, -50),  // Southeast - height will be adjusted to terrain
+    new THREE.Vector3(-50, PLAYER_HEIGHT, 50),  // Northwest - height will be adjusted to terrain
+    new THREE.Vector3(-50, PLAYER_HEIGHT, -50), // Southwest - height will be adjusted to terrain
+    new THREE.Vector3(50, PLAYER_HEIGHT, 50),   // Northeast - height will be adjusted to terrain
+    new THREE.Vector3(0, PLAYER_HEIGHT, 0),     // Center - height will be adjusted to terrain
+];
+
+function getSpawnPointsForCurrentMap(): THREE.Vector3[] {
+    if (currentMapType === MapType.MOUNTAIN) {
+        return mountainSpawnPoints;
+    }
+    return defaultSpawnPoints;
+}
+
+// Function to detect terrain height at given X,Z coordinates
+function getTerrainHeightAt(x: number, z: number): number {
+    if (currentMapType !== MapType.MOUNTAIN || terrainMeshes.length === 0) {
+        return PLAYER_HEIGHT; // Default height for non-mountain maps
+    }
+    
+    // Create a raycaster pointing downward from high above
+    const raycaster = new THREE.Raycaster();
+    const rayOrigin = new THREE.Vector3(x, 1000, z); // Start from high above
+    const rayDirection = new THREE.Vector3(0, -1, 0); // Point downward
+    
+    raycaster.set(rayOrigin, rayDirection);
+    
+    // Collect all meshes from terrain for intersection testing
+    const terrainMeshesToTest: THREE.Mesh[] = [];
+    terrainMeshes.forEach(terrain => {
+        terrain.traverse((child: any) => {
+            if (child instanceof THREE.Mesh) {
+                terrainMeshesToTest.push(child);
+            }
+        });
+    });
+    
+    // Find intersections with terrain
+    const intersections = raycaster.intersectObjects(terrainMeshesToTest);
+    
+    if (intersections.length > 0) {
+        // Return the height of the highest intersection point + player height
+        const highestPoint = intersections[0].point.y;
+        const adjustedHeight = highestPoint + PLAYER_HEIGHT;
+        return adjustedHeight;
+    }
+    
+    // Fallback to default height if no intersection found
+    return PLAYER_HEIGHT + 10; // Slightly elevated fallback
+}
+
+// Function to adjust spawn point to terrain height
+function adjustSpawnPointToTerrain(spawnPoint: THREE.Vector3): THREE.Vector3 {
+    if (currentMapType === MapType.MOUNTAIN) {
+        const terrainHeight = getTerrainHeightAt(spawnPoint.x, spawnPoint.z);
+        return new THREE.Vector3(spawnPoint.x, terrainHeight, spawnPoint.z);
+    }
+    return spawnPoint.clone();
+}
 const mapFeatures: THREE.Mesh[] = [];
+const terrainMeshes: THREE.Object3D[] = []; // Store terrain meshes separately from collision objects
+let cachedTerrainMeshes: THREE.Mesh[] = []; // Cache terrain meshes for performance
 const arenaMapFeatureMaterial = new THREE.MeshStandardMaterial({ color: 0x607D8B, roughness: 0.8, metalness: 0.2 });
 const urbanBuildingMaterial = new THREE.MeshStandardMaterial({ color: 0x78909C, roughness: 0.7, metalness: 0.1 }); 
 const urbanObstacleMaterial = new THREE.MeshStandardMaterial({ color: 0x546E7A, roughness: 0.8, metalness: 0.1 }); 
@@ -282,12 +352,14 @@ const ARENA_GROUND_COLOR = 0x283747;
 const URBAN_GROUND_COLOR = 0x424242; 
 const FOREST_GROUND_COLOR = 0x556B2F;
 const PLAINS_GROUND_COLOR = 0x6B8E23; // Olive drab for grasslands
+const MOUNTAIN_GROUND_COLOR = 0x5D4E37; // Brown for rocky terrain
 
 enum MapType {
     ARENA,
     URBAN,
     FOREST,
-    PLAINS
+    PLAINS,
+    MOUNTAIN
 }
 let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
@@ -340,10 +412,11 @@ function determineMapType(seedForChoice: number, selection: MapType | 'random'):
     if (selection === 'random') {
         const tempPrng = new PRNG(seedForChoice); // Use the provided seed for a temporary PRNG
         const randVal = tempPrng.next();
-        if (randVal < 0.25) return MapType.ARENA;
-        if (randVal < 0.50) return MapType.URBAN;
-        if (randVal < 0.75) return MapType.FOREST;
-        return MapType.PLAINS;
+        if (randVal < 0.20) return MapType.ARENA;
+        if (randVal < 0.40) return MapType.URBAN;
+        if (randVal < 0.60) return MapType.FOREST;
+        if (randVal < 0.80) return MapType.PLAINS;
+        return MapType.MOUNTAIN;
     }
     return selection as MapType;
 }
@@ -437,10 +510,12 @@ function selectRandomSpawnPoint(
     
     // Return a safe point if available, otherwise fallback to center with warning
     if (safePoints.length > 0) {
-        return safePoints[prng.nextInt(0, safePoints.length - 1)].clone();
+        const selectedPoint = safePoints[prng.nextInt(0, safePoints.length - 1)].clone();
+        return adjustSpawnPointToTerrain(selectedPoint);
     } else {
         console.warn('No safe spawn points found! Using fallback position.');
-        return new THREE.Vector3(0, PLAYER_HEIGHT + 5, 0); // Spawn above center as emergency fallback
+        const fallbackPoint = new THREE.Vector3(0, PLAYER_HEIGHT + 5, 0);
+        return adjustSpawnPointToTerrain(fallbackPoint);
     }
 }
 
@@ -807,10 +882,11 @@ function initializeApp() {
   const mapUrbanButton = document.getElementById('map-urban-btn') as HTMLButtonElement;
   const mapForestButton = document.getElementById('map-forest-btn') as HTMLButtonElement;
   const mapPlainsButton = document.getElementById('map-plains-btn') as HTMLButtonElement;
+  const mapMountainButton = document.getElementById('map-mountain-btn') as HTMLButtonElement;
   const mapRandomButton = document.getElementById('map-random-btn') as HTMLButtonElement;
-  const mapSelectionButtons = [mapArenaButton, mapUrbanButton, mapForestButton, mapPlainsButton, mapRandomButton];
+  const mapSelectionButtons = [mapArenaButton, mapUrbanButton, mapForestButton, mapPlainsButton, mapMountainButton, mapRandomButton];
 
-  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapRandomButton) {
+  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapMountainButton || !mapRandomButton) {
       console.error("Map selection buttons not found!");
   } else {
       function updateSelectedMapButton(selectedBtn: HTMLButtonElement) {
@@ -835,6 +911,10 @@ function initializeApp() {
       mapPlainsButton.addEventListener('click', () => {
           selectedMapType = MapType.PLAINS;
           updateSelectedMapButton(mapPlainsButton);
+      });
+      mapMountainButton.addEventListener('click', () => {
+          selectedMapType = MapType.MOUNTAIN;
+          updateSelectedMapButton(mapMountainButton);
       });
       mapRandomButton.addEventListener('click', () => {
           selectedMapType = 'random';
@@ -950,6 +1030,7 @@ function resetGameScene() {
         if (currentMapType === MapType.URBAN) groundColor = URBAN_GROUND_COLOR;
         else if (currentMapType === MapType.FOREST) groundColor = FOREST_GROUND_COLOR;
         else if (currentMapType === MapType.PLAINS) groundColor = PLAINS_GROUND_COLOR;
+        else if (currentMapType === MapType.MOUNTAIN) groundColor = MOUNTAIN_GROUND_COLOR;
         groundMesh.material.color.setHex(groundColor);
     }
 
@@ -966,6 +1047,10 @@ function resetGameScene() {
             scene.fog.color.setHex(0x87CEEB); // Light sky blue
             scene.fog.near = 0;
             scene.fog.far = 800; // Very far for long-range sniping
+        } else if (currentMapType === MapType.MOUNTAIN) {
+            scene.fog.color.setHex(0x6B8E60); // Mountain mist color
+            scene.fog.near = 0;
+            scene.fog.far = 400; // Medium distance for mountain terrain
         } else { 
             scene.fog.color.setHex(0x87ceeb); 
             scene.fog.near = 0;
@@ -975,7 +1060,8 @@ function resetGameScene() {
      if (scene) {
         let bgColor = 0x87ceeb; 
         if (currentMapType === MapType.URBAN) bgColor = 0x607D8B; 
-        else if (currentMapType === MapType.FOREST) bgColor = 0x3A5F0B; 
+        else if (currentMapType === MapType.FOREST) bgColor = 0x3A5F0B;
+        else if (currentMapType === MapType.MOUNTAIN) bgColor = 0x4682B4; // Steel blue for mountain sky 
         scene.background = new THREE.Color(bgColor);
     }
 
@@ -989,6 +1075,7 @@ function resetGameScene() {
         }
     });
     targetMeshes.clear();
+    targetBoundingBoxCache.clear();
 
     projectiles.forEach(p => {
         scene.remove(p.mesh);
@@ -1013,6 +1100,23 @@ function resetGameScene() {
         }
     });
     mapFeatures.length = 0;
+    
+    // Clean up terrain meshes
+    terrainMeshes.forEach(terrain => {
+        if (terrain.parent === scene) scene.remove(terrain);
+        terrain.traverse((child: any) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach((mat: any) => mat.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+        });
+    });
+    terrainMeshes.length = 0;
+    cachedTerrainMeshes.length = 0;
     generateMapFeatures(); 
 
     moveForwardActual = false; moveBackwardActual = false; moveLeftActual = false; moveRightActual = false;
@@ -1025,15 +1129,17 @@ function resetGameScene() {
       let localPlayerSpawnPoint: THREE.Vector3;
 
       if (gameMode === 'multiplayer') {
-          if (isPlayerOne === true && spawnPoints.length > 0) {
-              localPlayerSpawnPoint = spawnPoints[0].clone();
-          } else if (isPlayerOne === false && spawnPoints.length > 1) {
-              localPlayerSpawnPoint = spawnPoints[1].clone();
+          const currentSpawnPoints = getSpawnPointsForCurrentMap();
+          if (isPlayerOne === true && currentSpawnPoints.length > 0) {
+              localPlayerSpawnPoint = adjustSpawnPointToTerrain(currentSpawnPoints[0]);
+          } else if (isPlayerOne === false && currentSpawnPoints.length > 1) {
+              localPlayerSpawnPoint = adjustSpawnPointToTerrain(currentSpawnPoints[1]);
           } else { 
-              localPlayerSpawnPoint = selectRandomSpawnPoint(spawnPoints); 
+              localPlayerSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
           }
       } else { 
-          localPlayerSpawnPoint = selectRandomSpawnPoint(spawnPoints); 
+          const currentSpawnPoints = getSpawnPointsForCurrentMap();
+          localPlayerSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
       }
       playerObject.position.copy(localPlayerSpawnPoint);
       if (pitchObject) pitchObject.rotation.x = 0;
@@ -1321,13 +1427,28 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     if (zeroingDisplay) {
         if (weaponType === 'sniper') {
             zeroingDisplay.style.display = 'block';
-            zeroingDisplay.textContent = `${sniperZeroingDistance}m`;
+            updateZeroingDisplay();
         } else {
             zeroingDisplay.style.display = 'none';
         }
     }
 }
 
+
+function updateZeroingDisplay() {
+    const secondZeroElement = document.getElementById('second-zero');
+    const firstZeroElement = document.getElementById('first-zero');
+    
+    if (secondZeroElement && firstZeroElement && currentEquippedWeapon === 'sniper') {
+        const weaponStats = weaponStatsDB.sniper;
+        if (weaponStats && weaponStats.projectileSpeed) {
+            const firstZeroDistance = calculateFirstZeroDistance(sniperZeroingDistance, weaponStats.projectileSpeed);
+            
+            secondZeroElement.textContent = `${sniperZeroingDistance}m (2nd)`;
+            firstZeroElement.textContent = `${Math.round(firstZeroDistance)}m (1st)`;
+        }
+    }
+}
 
 function updateAmmoDisplay() {
     const ammoText = document.getElementById('ammo-text');
@@ -1364,15 +1485,41 @@ function updateAmmoDisplay() {
     }
 }
 
+function calculateFirstZeroDistance(secondZeroDistance: number, velocity: number): number {
+    // Calculate the first zero (close range intersection)
+    // Using ballistic trajectory mathematics
+    const g = GRAVITY;
+    const v = velocity;
+    const d2 = secondZeroDistance;
+    
+    // Simplified calculation for first zero distance
+    // First zero is typically much closer than second zero
+    const timeToSecondZero = d2 / v;
+    const maxHeight = (g * timeToSecondZero * timeToSecondZero) / 8;
+    const firstZeroDistance = d2 * 0.1; // Approximation: ~10% of second zero distance
+    
+    return Math.max(5, firstZeroDistance); // Minimum 5m for realism
+}
+
 function calculateZeroingAngle(distance: number, velocity: number): number {
-    // Calculate the angle needed to hit a target at given distance
-    // Using simplified ballistics formula: angle = arctan(g * distance / velocity^2)
+    // Calculate the angle needed to hit a target at given distance (SECOND ZERO)
+    // Using improved ballistics formula for second zero intersection
     const g = GRAVITY;
     const v = velocity;
     const d = distance;
     
-    // For small angles, we can use the approximation
-    const angle = Math.atan((g * d) / (v * v));
+    // Calculate launch angle for second zero intersection
+    // Formula: angle = 0.5 * arcsin(g * d / v^2)
+    const sinValue = (g * d) / (v * v);
+    
+    // Ensure sinValue is within valid range [-1, 1]
+    if (sinValue > 1) {
+        console.warn(`Zeroing distance ${d}m is too far for velocity ${v}m/s`);
+        return Math.atan((g * d) / (v * v)); // Fallback to first zero calculation
+    }
+    
+    // Second zero calculation (higher trajectory)
+    const angle = 0.5 * Math.asin(sinValue);
     return angle;
 }
 
@@ -1381,10 +1528,7 @@ function adjustZeroing(adjustment: number) {
         sniperZeroingDistance = Math.max(50, Math.min(300, sniperZeroingDistance + adjustment));
         
         // Update zeroing display
-        const zeroingDisplay = document.getElementById('zeroing-display');
-        if (zeroingDisplay) {
-            zeroingDisplay.textContent = `${sniperZeroingDistance}m`;
-        }
+        updateZeroingDisplay();
         
         // Show temporary message with new zeroing distance
         showTemporaryMessage(`Zeroing: ${sniperZeroingDistance}m`);
@@ -1903,6 +2047,252 @@ function generatePlainsMap() {
     }
 }
 
+function generateMountainMap() {
+    if (!prng) {
+        console.error("generateMountainMap: PRNG not initialized!");
+        return;
+    }
+
+    console.log("Loading terrain assets...");
+    
+    // First, try to load via fetch to check if file exists
+    const fbxPath = '/assets/89-terrain/uploads_files_2708212_terrain.fbx';
+    console.log("Attempting to load FBX from:", fbxPath);
+    
+    fetch(fbxPath, { method: 'HEAD' })
+        .then(response => {
+            console.log("FBX file accessibility check:", response.status, response.statusText);
+            if (!response.ok) {
+                throw new Error(`File not accessible: ${response.status}`);
+            }
+            return loadFBXTerrain(fbxPath);
+        })
+        .catch(error => {
+            console.error('FBX file not accessible:', error);
+            console.log('Falling back to procedural mountain generation...');
+            generateProceduralMountainMap();
+        });
+}
+
+function loadFBXTerrain(fbxPath: string) {
+    const fbxLoader = new FBXLoader();
+    
+    // Load the terrain FBX model
+    fbxLoader.load(
+        fbxPath,
+        (terrainModel) => {
+            console.log("Terrain FBX loaded successfully");
+            console.log("Terrain model:", terrainModel);
+            console.log("Terrain children count:", terrainModel.children.length);
+            
+            // Debug: Log all children in the model
+            terrainModel.traverse((child: any) => {
+                console.log("Child type:", child.type, "Name:", child.name);
+                if (child.geometry) {
+                    console.log("  Geometry vertices:", child.geometry.attributes.position?.count || 0);
+                }
+            });
+            
+            // Set up terrain material
+            const terrainMaterial = new THREE.MeshStandardMaterial({
+                color: 0x8B7355, // Mountain brown
+                roughness: 0.8,
+                metalness: 0.1
+            });
+
+            let meshCount = 0;
+            // Apply material to all meshes in the model
+            terrainModel.traverse((child: any) => {
+                if (child instanceof THREE.Mesh) {
+                    meshCount++;
+                    console.log(`Processing mesh ${meshCount}:`, child.name);
+                    if (child.material) {
+                        // Dispose old material to prevent memory leaks
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((mat: any) => mat.dispose());
+                        } else {
+                            child.material.dispose();
+                        }
+                    }
+                    child.material = terrainMaterial;
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+
+            console.log(`Found and processed ${meshCount} meshes in terrain model`);
+
+            // Use the terrain as-is, just scale appropriately for gameplay
+            // Scale to fit the game's coordinate system (similar to other maps)
+            const terrainScale = 2.0; // Fixed scale for consistent gameplay
+            terrainModel.scale.set(terrainScale, terrainScale, terrainScale);
+            
+            // Center the terrain at origin
+            terrainModel.position.set(0, 0, 0);
+            
+            // Add to scene but keep separate from mapFeatures for proper collision handling
+            scene.add(terrainModel);
+            terrainMeshes.push(terrainModel); // Store for cleanup
+            // DO NOT add to mapFeatures - terrain has specialized collision detection
+            
+            // Cache terrain meshes for performance
+            cachedTerrainMeshes = [];
+            terrainModel.traverse((child: any) => {
+                if (child instanceof THREE.Mesh) {
+                    cachedTerrainMeshes.push(child);
+                }
+            });
+            
+            console.log(`Generated mountain map using original terrain asset`);
+            console.log("Terrain model position:", terrainModel.position);
+            console.log("Terrain model scale:", terrainModel.scale);
+            console.log("Terrain model bounds:", terrainModel);
+            
+            // Trigger respawn after terrain is loaded to ensure proper height calculation
+            if (controls && scene) {
+                console.log("Terrain loaded - triggering respawn to adjust height");
+                setTimeout(() => {
+                    triggerRespawn();
+                }, 100); // Small delay to ensure terrain is fully processed
+            }
+        },
+        (progress) => {
+            console.log('Terrain loading progress:', (progress.loaded / progress.total * 100) + '%');
+        },
+        (error) => {
+            console.error('Error loading terrain FBX:', error);
+            console.error('Error details:', error.message || error);
+            console.log('FBX file path attempted:', '/assets/89-terrain/uploads_files_2708212_terrain.fbx');
+            console.log('Falling back to procedural mountain generation...');
+            // Fallback to procedural generation if asset loading fails
+            generateProceduralMountainMap();
+        }
+    );
+}
+
+// Procedural elements to complement terrain assets
+function addProceduralMountainElements() {
+    if (!prng) return;
+
+    const mountainRockMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x696969, 
+        roughness: 0.9, 
+        metalness: 0.1 
+    });
+
+    const mountainBounds = 250;
+
+    // Add scattered boulders
+    const numBoulders = prng.nextInt(15, 25);
+    for (let i = 0; i < numBoulders; i++) {
+        const boulderSize = prng.randFloat(1.5, 6);
+        const boulderGeometry = new THREE.SphereGeometry(boulderSize, 8, 8);
+        const boulderMesh = new THREE.Mesh(boulderGeometry, mountainRockMaterial);
+        
+        let boulderX, boulderZ;
+        let attempts = 0;
+        do {
+            boulderX = prng.randFloat(-mountainBounds, mountainBounds);
+            boulderZ = prng.randFloat(-mountainBounds, mountainBounds);
+            attempts++;
+        } while (attempts < 10 && mapFeatures.some(feature => 
+            Math.abs(feature.position.x - boulderX) < 8 && 
+            Math.abs(feature.position.z - boulderZ) < 8
+        ));
+        
+        boulderMesh.position.set(boulderX, boulderSize / 2, boulderZ);
+        boulderMesh.scale.set(1, prng.randFloat(0.7, 1.3), 1);
+        boulderMesh.castShadow = true;
+        boulderMesh.receiveShadow = true;
+        scene.add(boulderMesh);
+        mapFeatures.push(boulderMesh);
+    }
+
+    // Add sparse mountain trees
+    const numTrees = prng.nextInt(3, 8);
+    for (let i = 0; i < numTrees; i++) {
+        const treeHeight = prng.randFloat(6, 12);
+        const treeRadius = prng.randFloat(1.5, 3);
+        
+        // Tree trunk
+        const trunkGeometry = new THREE.CylinderGeometry(treeRadius * 0.3, treeRadius * 0.4, treeHeight * 0.6);
+        const trunkMesh = new THREE.Mesh(trunkGeometry, new THREE.MeshStandardMaterial({ 
+            color: 0x8B4513, 
+            roughness: 0.8 
+        }));
+        
+        let treeX, treeZ;
+        let attempts = 0;
+        do {
+            treeX = prng.randFloat(-mountainBounds + 20, mountainBounds - 20);
+            treeZ = prng.randFloat(-mountainBounds + 20, mountainBounds - 20);
+            attempts++;
+        } while (attempts < 10 && mapFeatures.some(feature => 
+            Math.abs(feature.position.x - treeX) < 12 && 
+            Math.abs(feature.position.z - treeZ) < 12
+        ));
+        
+        trunkMesh.position.set(treeX, treeHeight * 0.3, treeZ);
+        trunkMesh.castShadow = true;
+        scene.add(trunkMesh);
+        mapFeatures.push(trunkMesh);
+        
+        // Tree foliage
+        const foliageGeometry = new THREE.ConeGeometry(treeRadius, treeHeight * 0.6, 8);
+        const foliageMesh = new THREE.Mesh(foliageGeometry, new THREE.MeshStandardMaterial({ 
+            color: 0x228B22, 
+            roughness: 0.8 
+        }));
+        foliageMesh.position.set(treeX, treeHeight * 0.8, treeZ);
+        foliageMesh.castShadow = true;
+        scene.add(foliageMesh);
+        mapFeatures.push(foliageMesh);
+    }
+}
+
+// Fallback function if asset loading fails
+function generateProceduralMountainMap() {
+    if (!prng) return;
+
+    const mountainRockMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x696969, 
+        roughness: 0.9, 
+        metalness: 0.1 
+    });
+
+    const mountainBounds = 350;
+
+    // Create a few large mountain peaks as fallback
+    const numPeaks = prng.nextInt(2, 4);
+    for (let i = 0; i < numPeaks; i++) {
+        const peakHeight = prng.randFloat(30, 60);
+        const peakRadius = prng.randFloat(20, 35);
+        
+        const peakGeometry = new THREE.ConeGeometry(peakRadius, peakHeight, 8);
+        const peakMesh = new THREE.Mesh(peakGeometry, mountainRockMaterial);
+        
+        let peakX, peakZ;
+        let attempts = 0;
+        do {
+            peakX = prng.randFloat(-mountainBounds, mountainBounds);
+            peakZ = prng.randFloat(-mountainBounds, mountainBounds);
+            attempts++;
+        } while (attempts < 15 && mapFeatures.some(feature => 
+            Math.abs(feature.position.x - peakX) < 50 && 
+            Math.abs(feature.position.z - peakZ) < 50
+        ));
+        
+        peakMesh.position.set(peakX, peakHeight / 2, peakZ);
+        peakMesh.castShadow = true;
+        peakMesh.receiveShadow = true;
+        scene.add(peakMesh);
+        mapFeatures.push(peakMesh);
+    }
+
+    addProceduralMountainElements();
+    console.log(`Generated fallback procedural mountain map with ${mapFeatures.length} features`);
+}
+
 function generateMapFeatures() {
     mapFeatures.forEach(feature => {
         if (feature.parent === scene) { 
@@ -1921,6 +2311,23 @@ function generateMapFeatures() {
         }
     });
     mapFeatures.length = 0;
+    
+    // Clean up terrain meshes
+    terrainMeshes.forEach(terrain => {
+        if (terrain.parent === scene) scene.remove(terrain);
+        terrain.traverse((child: any) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach((mat: any) => mat.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+        });
+    });
+    terrainMeshes.length = 0;
+    cachedTerrainMeshes.length = 0;
 
     const treeGroupsToRemove = scene.children.filter(child => child.name.startsWith("forest_tree_group"));
     treeGroupsToRemove.forEach(group => scene.remove(group));
@@ -1945,6 +2352,8 @@ function generateMapFeatures() {
         generateForestMap();
     } else if (currentMapType === MapType.PLAINS) {
         generatePlainsMap();
+    } else if (currentMapType === MapType.MOUNTAIN) {
+        generateMountainMap();
     } else { 
         generateArenaMap();
     }
@@ -1976,6 +2385,10 @@ function createTargets() {
     numTargets = 100; // More targets for the large map
     boundsMultiplier = 900; // Cover most of the 1km x 1km area
     yBase = 0.75 + (prng.next() * 15); // Slightly higher for visibility
+  } else if (currentMapType === MapType.MOUNTAIN) {
+    numTargets = 40; // Fewer targets for the specific terrain layout
+    boundsMultiplier = 200; // Match terrain asset scale
+    yBase = 0.75 + (prng.next() * 20); // Appropriate height for terrain
   }
   console.log(`Creating ${numTargets} targets for map type ${currentMapType !== undefined ? MapType[currentMapType] : 'undefined'}`);
 
@@ -1993,6 +2406,8 @@ function createTargets() {
             box.position.y = 0.75 + (prng.next() * 25);
         } else if (currentMapType === MapType.FOREST) {
              box.position.y = 0.75 + (prng.next() * 5); 
+        } else if (currentMapType === MapType.MOUNTAIN) {
+            box.position.y = 0.75 + (prng.next() * 20); // Altitude matching terrain features
         } else { 
             box.position.y = 0.75 + (prng.next() * 12);
         }
@@ -2015,6 +2430,9 @@ function createTargets() {
             box.name = targetId;
             scene.add(box);
             targetMeshes.set(targetId, box);
+            // Cache bounding box for performance
+            const boundingBox = new THREE.Box3().setFromObject(box);
+            targetBoundingBoxCache.set(targetId, boundingBox.clone().expandByScalar(PROJECTILE_RADIUS));
             placed = true;
             break;
         } else {
@@ -2065,14 +2483,15 @@ function setupMultiplayerSceneElements() {
   remotePlayerMesh.add(legsMesh);
   
   let remoteSpawnPos: THREE.Vector3;
-   if (isPlayerOne === true && spawnPoints.length > 1) { 
-        remoteSpawnPos = spawnPoints[1].clone();
-    } else if (isPlayerOne === false && spawnPoints.length > 0) { 
-        remoteSpawnPos = spawnPoints[0].clone();
+  const currentSpawnPoints = getSpawnPointsForCurrentMap();
+   if (isPlayerOne === true && currentSpawnPoints.length > 1) { 
+        remoteSpawnPos = adjustSpawnPointToTerrain(currentSpawnPoints[1]);
+    } else if (isPlayerOne === false && currentSpawnPoints.length > 0) { 
+        remoteSpawnPos = adjustSpawnPointToTerrain(currentSpawnPoints[0]);
     } else { 
-        remoteSpawnPos = selectRandomSpawnPoint(spawnPoints.slice(2)); 
+        remoteSpawnPos = selectRandomSpawnPoint(currentSpawnPoints.slice(2)); 
     }
-  remotePlayerMesh.position.set(remoteSpawnPos.x, 0, remoteSpawnPos.z); 
+  remotePlayerMesh.position.set(remoteSpawnPos.x, remoteSpawnPos.y, remoteSpawnPos.z); 
 
   remotePlayerMesh.castShadow = true; remotePlayerMesh.receiveShadow = true;
   remotePlayerMesh.name = "remotePlayer_1";
@@ -2541,7 +2960,8 @@ function sendGameEvent(event: GameEvent) {
 }
 
 function triggerRespawn() {
-    if (!controls || !scene || spawnPoints.length === 0 || !prng) return;
+    const currentSpawnPoints = getSpawnPointsForCurrentMap();
+    if (!controls || !scene || currentSpawnPoints.length === 0 || !prng) return;
     const playerObject = controls.getObject();
     let newSpawnPoint: THREE.Vector3;
 
@@ -2550,12 +2970,12 @@ function triggerRespawn() {
         remotePlayerMesh.getWorldPosition(remotePlayerWorldPosition); 
         
         newSpawnPoint = selectRandomSpawnPoint( 
-            spawnPoints,
+            currentSpawnPoints,
             remotePlayerWorldPosition, 
             50 
         );
     } else {
-        newSpawnPoint = selectRandomSpawnPoint(spawnPoints); 
+        newSpawnPoint = selectRandomSpawnPoint(currentSpawnPoints); 
     }
     
     playerObject.position.copy(newSpawnPoint);
@@ -2805,9 +3225,18 @@ function updateProjectiles(delta: number) {
     
     let hitSomething = false;
 
+    // Optimized target collision detection with caching and distance culling
+    const projectilePosition = p.mesh.position;
+    const maxCheckDistance = 50; // Only check targets within 50 units
+    
     for (const [targetId, target] of targetMeshes.entries()) {
-        const targetBoundingBox = new THREE.Box3().setFromObject(target);
-        const expandedTargetBox = targetBoundingBox.clone().expandByScalar(PROJECTILE_RADIUS);
+        // Distance culling - skip distant targets for performance
+        const targetDistance = projectilePosition.distanceTo(target.position);
+        if (targetDistance > maxCheckDistance) continue;
+        
+        // Use cached bounding box instead of calculating each frame
+        const expandedTargetBox = targetBoundingBoxCache.get(targetId);
+        if (!expandedTargetBox) continue;
         
         let intersectsThisFrame = false;
         if (projectileSegmentLength >= 0.0001) {
@@ -2817,11 +3246,12 @@ function updateProjectiles(delta: number) {
             }
         }
         
-        if (intersectsThisFrame || expandedTargetBox.containsPoint(p.mesh.position)) {
+        if (intersectsThisFrame || expandedTargetBox.containsPoint(projectilePosition)) {
             scene.remove(target);
             if (target.geometry) target.geometry.dispose();
             if (target.material && !Array.isArray(target.material)) (target.material as THREE.Material).dispose();
             targetMeshes.delete(targetId);
+            targetBoundingBoxCache.delete(targetId);
             hitSomething = true;
             break; 
         }
@@ -2885,6 +3315,8 @@ function updateProjectiles(delta: number) {
             }
         }
     }
+    
+    // Terrain collision skipped for performance - bullets pass through terrain
     
     // Check collision with ground
     if (!hitSomething && groundMesh) {
@@ -3196,6 +3628,7 @@ function animate() {
     // Try X movement first
     playerObject.translateX(intendedMove.x);
     playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS*2 , PLAYER_RADIUS * 2) );
+    // Check collision with regular map features
     for (const feature of mapFeatures) { 
         const featureBox = new THREE.Box3().setFromObject(feature); 
         if (playerCollider.intersectsBox(featureBox)) { 
@@ -3205,9 +3638,22 @@ function animate() {
         } 
     }
     
+    // Check collision with terrain (mountain maps)
+    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
+        for (const terrainMesh of cachedTerrainMeshes) {
+            const terrainBox = new THREE.Box3().setFromObject(terrainMesh);
+            if (playerCollider.intersectsBox(terrainBox)) {
+                playerObject.position.x = originalPosition.x;
+                velocity.x = 0;
+                break;
+            }
+        }
+    }
+    
     // Try Z movement
     playerObject.translateZ(intendedMove.z);
     playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT- PLAYER_RADIUS*2, PLAYER_RADIUS * 2) );
+    // Check collision with regular map features
     for (const feature of mapFeatures) { 
         const featureBox = new THREE.Box3().setFromObject(feature); 
         if (playerCollider.intersectsBox(featureBox)) { 
@@ -3215,6 +3661,18 @@ function animate() {
             velocity.z = 0; 
             break; 
         } 
+    }
+    
+    // Check collision with terrain (mountain maps)
+    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
+        for (const terrainMesh of cachedTerrainMeshes) {
+            const terrainBox = new THREE.Box3().setFromObject(terrainMesh);
+            if (playerCollider.intersectsBox(terrainBox)) {
+                playerObject.position.z = originalPosition.z;
+                velocity.z = 0;
+                break;
+            }
+        }
     }
     
     // Final combined movement check to prevent corner clipping
@@ -3237,14 +3695,31 @@ function animate() {
     const rayOrigin = playerObject.position.clone(); rayOrigin.y += PLAYER_HEIGHT * 0.5;
     const rayDirection = new THREE.Vector3(0, -1, 0);
     const groundRaycaster = new THREE.Raycaster(rayOrigin, rayDirection, 0, PLAYER_HEIGHT * 2);
-    const allCollidableObjects = [groundMesh, ...mapFeatures.filter(f => {
+    // Collect all meshes for collision detection, including terrain children
+    const allCollidableObjects: THREE.Object3D[] = [groundMesh];
+    
+    // Add regular map features
+    mapFeatures.forEach(f => {
         const featureBox = new THREE.Box3().setFromObject(f);
-        return featureBox.max.y < rayOrigin.y + PLAYER_HEIGHT * 0.5; 
-    })];
+        if (featureBox.max.y < rayOrigin.y + PLAYER_HEIGHT * 0.5) {
+            allCollidableObjects.push(f);
+        }
+    });
+    
+    // For mountain maps, add cached terrain meshes for performance
+    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
+        allCollidableObjects.push(...cachedTerrainMeshes);
+    }
+    
     const intersects = groundRaycaster.intersectObjects(allCollidableObjects, false);
-    if (intersects.length > 0) { const closestIntersect = intersects[0]; playerObject.position.y = closestIntersect.point.y + PLAYER_HEIGHT; }
+    
+    if (intersects.length > 0) { 
+        const closestIntersect = intersects[0]; 
+        const newY = closestIntersect.point.y + PLAYER_HEIGHT;
+        playerObject.position.y = newY;
+    }
     else { 
-       playerObject.position.y -= 9.81 * delta * delta * 2; 
+        playerObject.position.y -= 9.81 * delta * delta * 2; 
     }
 
     if (pitchObject) {
