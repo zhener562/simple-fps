@@ -67,13 +67,21 @@ let isAimingWithKeyActual = false;
 let isAimingWithMouseActual = false;
 let isFiringSMGActual = false;
 
+// Jump variables
+let isOnGround = true;
+let verticalVelocity = 0;
+let horizontalVelocity = new THREE.Vector3(); // Persistent horizontal momentum
+
 
 const PLAYER_HEIGHT = 1.8;
 const PLAYER_RADIUS = 0.4;
 const MOVEMENT_SPEED = 5.0 * 1.5; // Increased movement speed
 const PROJECTILE_LIFETIME = 5.0; 
 const PROJECTILE_RADIUS = 0.08;
-const GRAVITY = 9.8; // Gravity acceleration (m/s²) 
+const GRAVITY = 9.8; // Gravity acceleration (m/s²)
+const JUMP_VELOCITY = 7.0; // Initial jump velocity (m/s)
+const MAX_CLIMBABLE_ANGLE = 45; // Maximum climbable slope angle in degrees
+const STEP_UP_HEIGHT = 0.5; // Maximum height player can automatically step up 
 
 const projectileGeometry = new THREE.SphereGeometry(PROJECTILE_RADIUS, 8, 8);
 const handgunProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -2447,6 +2455,99 @@ function createTargets() {
   console.log(`Placed ${targetMeshes.size} targets.`);
 }
 
+function getNearestTarget(): { target: THREE.Mesh; distance: number; direction: THREE.Vector3 } | null {
+  if (targetMeshes.size === 0 || !controls || !camera) return null;
+  
+  const playerPosition = controls.getObject().position;
+  let nearestTarget: THREE.Mesh | null = null;
+  let nearestDistance = Infinity;
+  
+  targetMeshes.forEach((target) => {
+    const distance = playerPosition.distanceTo(target.position);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestTarget = target;
+    }
+  });
+  
+  if (nearestTarget) {
+    const direction = new THREE.Vector3()
+      .subVectors(nearestTarget.position, playerPosition)
+      .normalize();
+    
+    return {
+      target: nearestTarget,
+      distance: nearestDistance,
+      direction: direction
+    };
+  }
+  
+  return null;
+}
+
+function updateEnemyCompass() {
+  const compassElement = document.getElementById('enemy-compass');
+  const compassArrow = document.getElementById('compass-arrow');
+  const compassDistance = document.getElementById('compass-distance');
+  
+  if (!compassElement || !compassArrow || !compassDistance) return;
+  
+  // Only show compass for enemy players in multiplayer mode
+  if (gameMode === 'multiplayer' && remotePlayerMesh && controls && camera) {
+    compassElement.style.display = 'block';
+    
+    const playerPosition = controls.getObject().position;
+    const enemyPlayerPosition = remotePlayerMesh.position;
+    
+    // Calculate direction vector from player to enemy player
+    const toEnemyPlayer = new THREE.Vector3()
+      .subVectors(enemyPlayerPosition, playerPosition)
+      .normalize();
+    
+    // Get camera's forward direction (where player is looking)
+    const cameraDirection = new THREE.Vector3();
+    camera.getWorldDirection(cameraDirection);
+    
+    // Project both vectors onto the horizontal plane (Y = 0) for 2D compass calculation
+    const flatCameraDir = new THREE.Vector3(cameraDirection.x, 0, cameraDirection.z).normalize();
+    const flatEnemyPlayerDir = new THREE.Vector3(toEnemyPlayer.x, 0, toEnemyPlayer.z).normalize();
+    
+    /*
+     * コンパス角度計算の説明:
+     * 1. プレイヤーのカメラが向いている方向をコンパスの「北」(0度)とする
+     * 2. 敵プレイヤーへの方向ベクトルとカメラの向きベクトルの間の角度を計算
+     * 3. 外積(cross product)を使って回転方向を判定:
+     *    - 正の値: 時計回り (右側)
+     *    - 負の値: 反時計回り (左側)
+     * 4. 内積(dot product)を使って前後の位置関係を判定:
+     *    - 正の値: 前方
+     *    - 負の値: 後方
+     */
+    
+    // 2Dでの外積計算 (Z成分のみ): カメラ方向 × 敵プレイヤー方向
+    const crossProduct = flatCameraDir.x * flatEnemyPlayerDir.z - flatCameraDir.z * flatEnemyPlayerDir.x;
+    // 内積計算: カメラ方向 · 敵プレイヤー方向
+    const dotProduct = flatCameraDir.dot(flatEnemyPlayerDir);
+    
+    // atan2を使用して正確な角度を計算 (-π to π)
+    const angle = Math.atan2(crossProduct, dotProduct);
+    
+    // ラジアンを度に変換し、矢印の回転角度として適用
+    // 負の符号: CSSの回転方向を調整 (時計回りが正の角度)
+    const angleDegrees = -angle * (180 / Math.PI);
+    
+    // 矢印を回転させて敵プレイヤーの方向を指す
+    compassArrow.style.transform = `rotate(${angleDegrees}deg)`;
+    
+    // 敵プレイヤーまでの距離を計算・表示
+    const distance = Math.round(playerPosition.distanceTo(enemyPlayerPosition));
+    compassDistance.textContent = `${distance}m`;
+  } else {
+    // マルチプレイヤーモードでない、または敵プレイヤーがいない場合はコンパスを非表示
+    compassElement.style.display = 'none';
+  }
+}
+
 function setupMultiplayerSceneElements() {
   if (remotePlayerMesh) {
       scene.remove(remotePlayerMesh);
@@ -2637,7 +2738,13 @@ function setupDataChannelEvents() {
             const message = JSON.parse(event.data as string);
             if (message.type === 'playerState' && remotePlayerMesh) {
                 const state = message.data as PlayerState;
-                remotePlayerMesh.position.set(state.position.x, state.position.y - PLAYER_HEIGHT, state.position.z);
+                // Adjust remote player position for terrain height
+                let adjustedY = state.position.y - PLAYER_HEIGHT;
+                if (currentMapType === MapType.MOUNTAIN) {
+                    const terrainHeight = getTerrainHeightAt(state.position.x, state.position.z);
+                    adjustedY = Math.max(adjustedY, terrainHeight);
+                }
+                remotePlayerMesh.position.set(state.position.x, adjustedY, state.position.z);
                 remotePlayerMesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
 
                 if (remotePlayerHandgunMesh && remotePlayerSniperMesh && remotePlayerSMGMesh) {
@@ -3029,6 +3136,90 @@ function onWindowResize() {
 function queueInput(action: () => void) { 
   pendingInputs.push({ timestamp: performance.now(), action });
 }
+
+function jump() {
+  if (isOnGround && controls) {
+    verticalVelocity = JUMP_VELOCITY;
+    isOnGround = false;
+  }
+}
+
+// Check if slope is climbable by testing angle
+function canClimbSlope(fromPos: THREE.Vector3, toPos: THREE.Vector3, normal: THREE.Vector3): boolean {
+  const slopeAngle = Math.acos(Math.abs(normal.y)) * (180 / Math.PI);
+  return slopeAngle <= MAX_CLIMBABLE_ANGLE;
+}
+
+// Try to step up small obstacles automatically
+function tryStepUp(originalPos: THREE.Vector3, intendedPos: THREE.Vector3): THREE.Vector3 | null {
+  if (currentMapType !== MapType.MOUNTAIN || cachedTerrainMeshes.length === 0) {
+    return null;
+  }
+  
+  // Cast ray downward from elevated position to find step-up height
+  const stepUpPos = intendedPos.clone();
+  stepUpPos.y = originalPos.y + STEP_UP_HEIGHT;
+  
+  const raycaster = new THREE.Raycaster();
+  raycaster.set(new THREE.Vector3(stepUpPos.x, stepUpPos.y + 1, stepUpPos.z), new THREE.Vector3(0, -1, 0));
+  
+  const intersects = raycaster.intersectObjects(cachedTerrainMeshes);
+  
+  if (intersects.length > 0) {
+    const groundHeight = intersects[0].point.y;
+    const stepHeight = groundHeight - originalPos.y + PLAYER_HEIGHT;
+    
+    // Check if step is within acceptable range
+    if (stepHeight > 0 && stepHeight <= STEP_UP_HEIGHT) {
+      return new THREE.Vector3(intendedPos.x, groundHeight + PLAYER_HEIGHT, intendedPos.z);
+    }
+  }
+  
+  return null;
+}
+
+// Enhanced slope detection using raycast
+function checkSlopeMovement(fromPos: THREE.Vector3, moveDir: THREE.Vector3): { canMove: boolean, adjustedPos?: THREE.Vector3 } {
+  if (currentMapType !== MapType.MOUNTAIN || cachedTerrainMeshes.length === 0) {
+    return { canMove: true };
+  }
+  
+  // Cast ray forward to detect slope
+  const rayOrigin = fromPos.clone();
+  rayOrigin.y += PLAYER_HEIGHT * 0.5;
+  
+  const rayDirection = moveDir.clone().normalize();
+  const raycaster = new THREE.Raycaster(rayOrigin, rayDirection, 0, PLAYER_RADIUS * 2);
+  
+  const intersects = raycaster.intersectObjects(cachedTerrainMeshes);
+  
+  if (intersects.length > 0) {
+    const hit = intersects[0];
+    const normal = hit.face?.normal;
+    
+    if (normal) {
+      // Transform normal to world space
+      const worldNormal = normal.clone().transformDirection(hit.object.matrixWorld);
+      
+      // Check if this is a climbable slope
+      if (canClimbSlope(fromPos, hit.point, worldNormal)) {
+        // Try step-up for small obstacles
+        const intendedPos = fromPos.clone().add(moveDir);
+        const stepUpResult = tryStepUp(fromPos, intendedPos);
+        
+        if (stepUpResult) {
+          return { canMove: true, adjustedPos: stepUpResult };
+        }
+        
+        return { canMove: true }; // Allow movement on climbable slopes
+      }
+      
+      return { canMove: false }; // Block movement on steep slopes
+    }
+  }
+  
+  return { canMove: true }; // No obstacle detected
+}
 function onKeyDown(event: KeyboardEvent) { 
   if (!controls || !controls.isLocked || isGameOver) return;
   switch (event.code) {
@@ -3037,6 +3228,7 @@ function onKeyDown(event: KeyboardEvent) {
     case 'KeyS': case 'ArrowDown': queueInput(() => moveBackwardActual = true); break;
     case 'KeyD': case 'ArrowRight': queueInput(() => moveRightActual = true); break;
     case 'ShiftLeft': queueInput(() => isAimingWithKeyActual = true); break;
+    case 'Space': queueInput(() => jump()); break; // Jump with spacebar
     case 'Digit1': queueInput(() => equipWeapon('handgun')); break;
     case 'Digit2': queueInput(() => equipWeapon('sniper')); break;
     case 'Digit3': queueInput(() => equipWeapon('smg')); break;
@@ -3615,81 +3807,125 @@ function animate() {
 
     const playerObject = controls.getObject(); 
     const currentSpeed = MOVEMENT_SPEED * ((isAimingWithKeyActual || isAimingWithMouseActual) ? 0.6 : 1.0);
-    velocity.x -= velocity.x * 10.0 * delta; velocity.z -= velocity.z * 10.0 * delta;
+    
+    // Calculate input direction in world space
     direction.z = Number(moveForwardActual) - Number(moveBackwardActual);
     direction.x = Number(moveLeftActual) - Number(moveRightActual);
     direction.normalize();
-    if (moveForwardActual || moveBackwardActual) velocity.z -= direction.z * currentSpeed * 10.0 * delta;
-    if (moveLeftActual || moveRightActual) velocity.x -= direction.x * currentSpeed * 10.0 * delta;
+    
+    // Apply different physics for ground vs air movement
+    if (isOnGround) {
+        // Ground movement: direct control with friction
+        const groundFriction = 8.0;
+        horizontalVelocity.x -= horizontalVelocity.x * groundFriction * delta;
+        horizontalVelocity.z -= horizontalVelocity.z * groundFriction * delta;
+        
+        // Add input acceleration
+        if (moveForwardActual || moveBackwardActual) {
+            horizontalVelocity.z -= direction.z * currentSpeed * 12.0 * delta;
+        }
+        if (moveLeftActual || moveRightActual) {
+            horizontalVelocity.x -= direction.x * currentSpeed * 12.0 * delta;
+        }
+    } else {
+        // Air movement: limited control with momentum preservation
+        const airControl = 0.3; // Reduced air control
+        const airFriction = 2.0; // Less friction in air
+        
+        horizontalVelocity.x -= horizontalVelocity.x * airFriction * delta;
+        horizontalVelocity.z -= horizontalVelocity.z * airFriction * delta;
+        
+        // Limited air control
+        if (moveForwardActual || moveBackwardActual) {
+            horizontalVelocity.z -= direction.z * currentSpeed * airControl * 12.0 * delta;
+        }
+        if (moveLeftActual || moveRightActual) {
+            horizontalVelocity.x -= direction.x * currentSpeed * airControl * 12.0 * delta;
+        }
+    }
+    
+    // Cap maximum horizontal speed
+    const maxSpeed = currentSpeed * 1.2;
+    const currentHorizontalSpeed = Math.sqrt(horizontalVelocity.x * horizontalVelocity.x + horizontalVelocity.z * horizontalVelocity.z);
+    if (currentHorizontalSpeed > maxSpeed) {
+        horizontalVelocity.x = (horizontalVelocity.x / currentHorizontalSpeed) * maxSpeed;
+        horizontalVelocity.z = (horizontalVelocity.z / currentHorizontalSpeed) * maxSpeed;
+    }
+    
     const intendedMove = new THREE.Vector3();
-    intendedMove.x = velocity.x * delta; intendedMove.z = velocity.z * delta;
+    intendedMove.x = horizontalVelocity.x * delta; 
+    intendedMove.z = horizontalVelocity.z * delta;
     const originalPosition = playerObject.position.clone();
     
-    // Try X movement first
-    playerObject.translateX(intendedMove.x);
-    playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS*2 , PLAYER_RADIUS * 2) );
-    // Check collision with regular map features
-    for (const feature of mapFeatures) { 
-        const featureBox = new THREE.Box3().setFromObject(feature); 
-        if (playerCollider.intersectsBox(featureBox)) { 
-            playerObject.position.x = originalPosition.x; 
-            velocity.x = 0; 
-            break; 
-        } 
+    // Use enhanced slope-aware movement for mountain maps
+    if (currentMapType === MapType.MOUNTAIN && (intendedMove.x !== 0 || intendedMove.z !== 0)) {
+        const moveResult = checkSlopeMovement(originalPosition, intendedMove);
+        
+        if (!moveResult.canMove) {
+            // Movement blocked by steep slope - stop horizontal movement
+            horizontalVelocity.x = 0;
+            horizontalVelocity.z = 0;
+        } else if (moveResult.adjustedPos) {
+            // Step-up detected - move to adjusted position
+            playerObject.position.copy(moveResult.adjustedPos);
+        } else {
+            // Normal movement allowed - use standard collision detection
+            playerObject.translateX(intendedMove.x);
+            playerObject.translateZ(intendedMove.z);
+        }
+    } else {
+        // Non-mountain maps use standard movement
+        // Try X movement first
+        playerObject.translateX(intendedMove.x);
     }
     
-    // Check collision with terrain (mountain maps)
-    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
-        for (const terrainMesh of cachedTerrainMeshes) {
-            const terrainBox = new THREE.Box3().setFromObject(terrainMesh);
-            if (playerCollider.intersectsBox(terrainBox)) {
+    // Apply collision detection only for non-mountain maps or if using standard movement
+    if (currentMapType !== MapType.MOUNTAIN || (intendedMove.x === 0 && intendedMove.z === 0)) {
+        playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS*2 , PLAYER_RADIUS * 2) );
+        // Check collision with regular map features
+        for (const feature of mapFeatures) { 
+            const featureBox = new THREE.Box3().setFromObject(feature); 
+            if (playerCollider.intersectsBox(featureBox)) { 
+                playerObject.position.x = originalPosition.x; 
+                horizontalVelocity.x = 0; 
+                break; 
+            } 
+        }
+    }
+    
+    // Z movement only for non-mountain maps (mountain maps handle both X and Z together)
+    if (currentMapType !== MapType.MOUNTAIN) {
+        // Try Z movement
+        playerObject.translateZ(intendedMove.z);
+        playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT- PLAYER_RADIUS*2, PLAYER_RADIUS * 2) );
+        // Check collision with regular map features
+        for (const feature of mapFeatures) { 
+            const featureBox = new THREE.Box3().setFromObject(feature); 
+            if (playerCollider.intersectsBox(featureBox)) { 
+                playerObject.position.z = originalPosition.z; 
+                horizontalVelocity.z = 0; 
+                break; 
+            } 
+        }
+    }
+    
+    // Final combined movement check to prevent corner clipping (non-mountain maps only)
+    if (currentMapType !== MapType.MOUNTAIN) {
+        const finalCollider = new THREE.Box3().setFromCenterAndSize(
+            new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z),
+            new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
+        );
+        
+        for (const feature of mapFeatures) {
+            const featureBox = new THREE.Box3().setFromObject(feature);
+            if (finalCollider.intersectsBox(featureBox)) {
+                // Revert to original position if final position causes collision
                 playerObject.position.x = originalPosition.x;
-                velocity.x = 0;
-                break;
-            }
-        }
-    }
-    
-    // Try Z movement
-    playerObject.translateZ(intendedMove.z);
-    playerCollider.setFromCenterAndSize( new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z), new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT- PLAYER_RADIUS*2, PLAYER_RADIUS * 2) );
-    // Check collision with regular map features
-    for (const feature of mapFeatures) { 
-        const featureBox = new THREE.Box3().setFromObject(feature); 
-        if (playerCollider.intersectsBox(featureBox)) { 
-            playerObject.position.z = originalPosition.z; 
-            velocity.z = 0; 
-            break; 
-        } 
-    }
-    
-    // Check collision with terrain (mountain maps)
-    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
-        for (const terrainMesh of cachedTerrainMeshes) {
-            const terrainBox = new THREE.Box3().setFromObject(terrainMesh);
-            if (playerCollider.intersectsBox(terrainBox)) {
                 playerObject.position.z = originalPosition.z;
-                velocity.z = 0;
+                horizontalVelocity.x = 0;
+                horizontalVelocity.z = 0;
                 break;
             }
-        }
-    }
-    
-    // Final combined movement check to prevent corner clipping
-    const finalCollider = new THREE.Box3().setFromCenterAndSize(
-        new THREE.Vector3(playerObject.position.x, originalPosition.y - PLAYER_HEIGHT / 2 + PLAYER_RADIUS, playerObject.position.z),
-        new THREE.Vector3(PLAYER_RADIUS * 2, PLAYER_HEIGHT - PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
-    );
-    
-    for (const feature of mapFeatures) {
-        const featureBox = new THREE.Box3().setFromObject(feature);
-        if (finalCollider.intersectsBox(featureBox)) {
-            // Revert to original position if final position causes collision
-            playerObject.position.x = originalPosition.x;
-            playerObject.position.z = originalPosition.z;
-            velocity.x = 0;
-            velocity.z = 0;
-            break;
         }
     }
     const rayOrigin = playerObject.position.clone(); rayOrigin.y += PLAYER_HEIGHT * 0.5;
@@ -3715,11 +3951,29 @@ function animate() {
     
     if (intersects.length > 0) { 
         const closestIntersect = intersects[0]; 
-        const newY = closestIntersect.point.y + PLAYER_HEIGHT;
-        playerObject.position.y = newY;
+        const groundY = closestIntersect.point.y + PLAYER_HEIGHT;
+        
+        // Apply gravity and jump physics
+        verticalVelocity -= GRAVITY * delta;
+        const newY = playerObject.position.y + verticalVelocity * delta;
+        
+        // Check if player should land on ground
+        if (newY <= groundY) {
+            playerObject.position.y = groundY;
+            if (verticalVelocity < 0) { // Only land if falling
+                verticalVelocity = 0;
+                isOnGround = true;
+            }
+        } else {
+            playerObject.position.y = newY;
+            isOnGround = false;
+        }
     }
     else { 
-        playerObject.position.y -= 9.81 * delta * delta * 2; 
+        // No ground detected, apply gravity
+        verticalVelocity -= GRAVITY * delta;
+        playerObject.position.y += verticalVelocity * delta;
+        isOnGround = false;
     }
 
     if (pitchObject) {
@@ -3730,7 +3984,8 @@ function animate() {
 
     if (gameMode === 'multiplayer' && time - lastSentStateTime > STATE_SEND_INTERVAL) { sendPlayerState(); lastSentStateTime = time; }
   } else { 
-      velocity.set(0,0,0); 
+      horizontalVelocity.set(0,0,0);
+      verticalVelocity = 0;
       if (pitchObject && cameraPitchRecoil !== 0) {
           const basePitchByMouse = pitchObject.rotation.x;
           let finalPitch = basePitchByMouse - cameraPitchRecoil;
@@ -3743,6 +3998,7 @@ function animate() {
   if (gameMode === 'multiplayer') updateRemoteProjectiles(delta);
   
   updateAmmoDisplay();
+  updateEnemyCompass();
 
   renderer.render(scene, camera);
 }
