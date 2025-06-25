@@ -80,10 +80,35 @@ let isAimingWithKeyActual = false;
 let isAimingWithMouseActual = false;
 let isFiringSMGActual = false;
 
+// Bike controls
+let bikeAccelerateActual = false;
+let bikeDecelerateActual = false;
+let bikeTurnLeftActual = false;
+let bikeTurnRightActual = false;
+
 // Jump variables
 let isOnGround = true;
 let verticalVelocity = 0;
 let horizontalVelocity = new THREE.Vector3(); // Persistent horizontal momentum
+
+// Bike system
+let isOnBike = false;
+let bikeModel: THREE.Group | null = null;
+let bikeSpeed = 0;
+let bikeMaxSpeed = 20.0; // Much faster than walking
+let bikeAcceleration = 8.0;
+let bikeDeceleration = 12.0;
+let bikeTurnSpeed = 2.0;
+let bikeDirection = 0; // Bike facing direction in radians
+let bikePosition = new THREE.Vector3();
+let bikeCanUseWeapons: string[] = ['handgun']; // Only handgun allowed on bike
+
+// Bike banking physics
+let bikeBankAngle = 0; // Current bank angle (lean angle) in radians
+let targetBankAngle = 0; // Target bank angle when turning
+let maxBankAngle = Math.PI / 6; // 30 degrees max lean (back to original)
+let bankSpeed = 0.8; // How fast bike leans into turns (even slower)
+let bankReturnSpeed = 0.6; // How fast bike returns to upright (even slower)
 
 // Health system
 const MAX_HEALTH = 100;
@@ -1346,6 +1371,50 @@ function createHandgunModel(): {model: THREE.Group, muzzlePoint: THREE.Object3D}
     return {model: handgunGrp, muzzlePoint: muzzle};
 }
 
+function createBikeModel(): THREE.Group {
+    const bikeGrp = new THREE.Group();
+    const bikeMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.8, roughness: 0.2 });
+    const redMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.6, roughness: 0.3 });
+    
+    // Main body frame
+    const frameGeometry = new THREE.BoxGeometry(0.1, 0.6, 1.8);
+    const frameMesh = new THREE.Mesh(frameGeometry, bikeMaterial);
+    frameMesh.position.y = 0.4;
+    frameMesh.castShadow = true;
+    bikeGrp.add(frameMesh);
+    
+    // Wheels
+    const wheelGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 12);
+    const frontWheel = new THREE.Mesh(wheelGeometry, bikeMaterial);
+    frontWheel.position.set(0, 0.3, -0.7);
+    frontWheel.rotation.z = Math.PI / 2;
+    frontWheel.castShadow = true;
+    bikeGrp.add(frontWheel);
+    
+    const backWheel = new THREE.Mesh(wheelGeometry, bikeMaterial);
+    backWheel.position.set(0, 0.3, 0.7);
+    backWheel.rotation.z = Math.PI / 2;
+    backWheel.castShadow = true;
+    bikeGrp.add(backWheel);
+    
+    // Handlebars
+    const handlebarGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8);
+    const handlebarMesh = new THREE.Mesh(handlebarGeometry, bikeMaterial);
+    handlebarMesh.position.set(0, 1.0, -0.5);
+    handlebarMesh.rotation.z = Math.PI / 2;
+    handlebarMesh.castShadow = true;
+    bikeGrp.add(handlebarMesh);
+    
+    // Seat
+    const seatGeometry = new THREE.BoxGeometry(0.4, 0.1, 0.3);
+    const seatMesh = new THREE.Mesh(seatGeometry, redMaterial);
+    seatMesh.position.set(0, 0.8, 0.2);
+    seatMesh.castShadow = true;
+    bikeGrp.add(seatMesh);
+    
+    return bikeGrp;
+}
+
 function createSniperRifleModel(): {model: THREE.Group, muzzlePoint: THREE.Object3D} {
     const sniperGrp = new THREE.Group();
     const sniperMaterial = new THREE.MeshStandardMaterial({ color: 0x282828, metalness: 0.6, roughness: 0.4 });
@@ -1512,6 +1581,12 @@ function populateWeaponStatsDB() {
 function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     if (!weaponStatsDB[weaponType] || !weaponStatsDB[weaponType].model) {
         console.error(`Weapon type ${weaponType} or its model is not initialized.`);
+        return;
+    }
+    
+    // Bike weapon restriction: only allow weapons in bikeCanUseWeapons array while on bike
+    if (isOnBike && !bikeCanUseWeapons.includes(weaponType)) {
+        showTemporaryMessage(`Cannot use ${weaponType} while on bike! Only ${bikeCanUseWeapons.join(', ')} allowed.`, 2000);
         return;
     }
     
@@ -1683,6 +1758,60 @@ function adjustZeroing(adjustment: number) {
     }
 }
 
+function toggleBike() {
+    if (!controls || !controls.isLocked || isGameOver) {
+        console.log("Cannot toggle bike: controls not ready or game over");
+        return;
+    }
+    
+    isOnBike = !isOnBike;
+    
+    if (isOnBike) {
+        // Initialize bike position to current player position
+        const playerObject = controls.getObject();
+        bikePosition.copy(playerObject.position);
+        bikeDirection = playerObject.rotation.y; // Store initial direction for A/D turning
+        bikeSpeed = 0;
+        
+        // Show bike model
+        if (bikeModel) {
+            bikeModel.visible = true;
+            bikeModel.position.copy(bikePosition);
+            bikeModel.rotation.y = bikeDirection; // Use bike direction
+        }
+        
+        // Force switch to handgun when getting on bike
+        if (currentEquippedWeapon !== 'handgun') {
+            equipWeapon('handgun');
+        }
+        
+        showTemporaryMessage("Bike ON - W/S: Accelerate/Brake, A/D: Turn", 3000);
+    } else {
+        // Hide bike model
+        if (bikeModel) {
+            bikeModel.visible = false;
+        }
+        
+        // Reset bike state when getting off
+        bikeSpeed = 0;
+        bikeAccelerateActual = false;
+        bikeDecelerateActual = false;
+        bikeTurnLeftActual = false;
+        bikeTurnRightActual = false;
+        
+        // Reset banking
+        bikeBankAngle = 0;
+        targetBankAngle = 0;
+        
+        // Reset camera bank angle
+        if (controls) {
+            controls.getObject().rotation.z = 0;
+        }
+        
+        showTemporaryMessage("Bike OFF", 2000);
+    }
+}
+
 function startReload() {
     if (isReloading || isGameOver) return;
     
@@ -1824,6 +1953,11 @@ function initThreeJSGame() {
   smgModel = smgData.model;
   smgMuzzlePoint = smgData.muzzlePoint;
   camera.add(smgModel);
+  
+  // Create bike model (initially hidden)
+  bikeModel = createBikeModel();
+  bikeModel.visible = false;
+  scene.add(bikeModel);
   
   populateWeaponStatsDB(); 
   equipWeapon('handgun'); 
@@ -3580,10 +3714,34 @@ function updateHealthRegeneration(deltaTime: number): void {
 function onKeyDown(event: KeyboardEvent) { 
   if (!controls || !controls.isLocked || isGameOver) return;
   switch (event.code) {
-    case 'KeyW': case 'ArrowUp': queueInput(() => moveForwardActual = true); break;
-    case 'KeyA': case 'ArrowLeft': queueInput(() => moveLeftActual = true); break;
-    case 'KeyS': case 'ArrowDown': queueInput(() => moveBackwardActual = true); break;
-    case 'KeyD': case 'ArrowRight': queueInput(() => moveRightActual = true); break;
+    case 'KeyW': case 'ArrowUp': 
+      if (isOnBike) {
+        queueInput(() => bikeAccelerateActual = true);
+      } else {
+        queueInput(() => moveForwardActual = true);
+      }
+      break;
+    case 'KeyA': case 'ArrowLeft': 
+      if (isOnBike) {
+        queueInput(() => bikeTurnLeftActual = true);
+      } else {
+        queueInput(() => moveLeftActual = true);
+      }
+      break;
+    case 'KeyS': case 'ArrowDown': 
+      if (isOnBike) {
+        queueInput(() => bikeDecelerateActual = true);
+      } else {
+        queueInput(() => moveBackwardActual = true);
+      }
+      break;
+    case 'KeyD': case 'ArrowRight': 
+      if (isOnBike) {
+        queueInput(() => bikeTurnRightActual = true);
+      } else {
+        queueInput(() => moveRightActual = true);
+      }
+      break;
     case 'ShiftLeft': queueInput(() => isAimingWithKeyActual = true); break;
     case 'Space': queueInput(() => jump()); break; // Jump with spacebar
     case 'Digit1': queueInput(() => equipWeapon('handgun')); break;
@@ -3595,6 +3753,7 @@ function onKeyDown(event: KeyboardEvent) {
       break;
     case 'PageUp': queueInput(() => adjustZeroing(25)); break; // Increase zeroing distance
     case 'PageDown': queueInput(() => adjustZeroing(-25)); break; // Decrease zeroing distance
+    case 'KeyV': queueInput(() => toggleBike()); break; // Toggle bike on/off
   }
 }
 function onKeyUp(event: KeyboardEvent) { 
@@ -3603,10 +3762,34 @@ function onKeyUp(event: KeyboardEvent) {
     return;
   }
   switch (event.code) {
-    case 'KeyW': case 'ArrowUp': queueInput(() => moveForwardActual = false); break;
-    case 'KeyA': case 'ArrowLeft': queueInput(() => moveLeftActual = false); break;
-    case 'KeyS': case 'ArrowDown': queueInput(() => moveBackwardActual = false); break;
-    case 'KeyD': case 'ArrowRight': queueInput(() => moveRightActual = false); break;
+    case 'KeyW': case 'ArrowUp': 
+      if (isOnBike) {
+        queueInput(() => bikeAccelerateActual = false);
+      } else {
+        queueInput(() => moveForwardActual = false);
+      }
+      break;
+    case 'KeyA': case 'ArrowLeft': 
+      if (isOnBike) {
+        queueInput(() => bikeTurnLeftActual = false);
+      } else {
+        queueInput(() => moveLeftActual = false);
+      }
+      break;
+    case 'KeyS': case 'ArrowDown': 
+      if (isOnBike) {
+        queueInput(() => bikeDecelerateActual = false);
+      } else {
+        queueInput(() => moveBackwardActual = false);
+      }
+      break;
+    case 'KeyD': case 'ArrowRight': 
+      if (isOnBike) {
+        queueInput(() => bikeTurnRightActual = false);
+      } else {
+        queueInput(() => moveRightActual = false);
+      }
+      break;
     case 'ShiftLeft': queueInput(() => isAimingWithKeyActual = false); break;
   }
 }
@@ -4249,13 +4432,81 @@ function animate() {
     const aimingMultiplier = (isAimingWithKeyActual || isAimingWithMouseActual) ? AIMING_SPEED_MULTIPLIER : 1.0;
     const currentSpeed = MOVEMENT_SPEED * aimingMultiplier * healthSpeedMultiplier;
     
-    // Calculate input direction in world space
-    direction.z = Number(moveForwardActual) - Number(moveBackwardActual);
-    direction.x = Number(moveLeftActual) - Number(moveRightActual);
-    direction.normalize();
-    
-    // Apply different physics for ground vs air movement
-    if (isOnGround) {
+    // Movement physics
+    if (isOnBike) {
+        // Bike acceleration/deceleration
+        if (bikeAccelerateActual) {
+            bikeSpeed = Math.min(bikeMaxSpeed, bikeSpeed + bikeAcceleration * delta);
+        } else if (bikeDecelerateActual) {
+            bikeSpeed = Math.max(-bikeMaxSpeed * 0.5, bikeSpeed - bikeDeceleration * delta); // Allow reverse at half speed
+        } else {
+            // Natural deceleration when no input
+            if (bikeSpeed > 0) {
+                bikeSpeed = Math.max(0, bikeSpeed - bikeDeceleration * 0.8 * delta);
+            } else if (bikeSpeed < 0) {
+                bikeSpeed = Math.min(0, bikeSpeed + bikeDeceleration * 0.8 * delta);
+            }
+        }
+        
+        // Bike banking physics (lean into turns like a real bike)
+        const cameraObject = controls.getObject();
+        
+        // Set target bank angle based on input (corrected direction)
+        if (bikeTurnLeftActual) {
+            targetBankAngle = maxBankAngle; // Lean right (into left turn)
+        } else if (bikeTurnRightActual) {
+            targetBankAngle = -maxBankAngle; // Lean left (into right turn)
+        } else {
+            targetBankAngle = 0; // Return to upright
+        }
+        
+        // Smoothly interpolate current bank angle towards target
+        const bankDelta = targetBankAngle - bikeBankAngle;
+        const currentBankSpeed = (targetBankAngle === 0) ? bankReturnSpeed : bankSpeed;
+        bikeBankAngle += Math.sign(bankDelta) * Math.min(Math.abs(bankDelta), currentBankSpeed * delta);
+        
+        // Calculate turn rate based on bank angle and speed (realistic physics)
+        const speedFactor = Math.abs(bikeSpeed) / bikeMaxSpeed; // 0 to 1
+        const turnRate = (bikeBankAngle * speedFactor * bikeTurnSpeed) / maxBankAngle;
+        
+        // Apply turning based on bank angle and speed
+        if (Math.abs(bikeSpeed) > 0.1) {
+            const actualTurnAmount = turnRate * delta;
+            bikeDirection += actualTurnAmount;
+            
+            // Rotate camera to maintain relative position during turn
+            cameraObject.rotateY(actualTurnAmount);
+        }
+        
+        // Move bike in its own direction (independent of camera)
+        const moveDistance = bikeSpeed * delta;
+        const bikeVelocity = new THREE.Vector3();
+        bikeVelocity.x = -Math.sin(bikeDirection) * moveDistance;
+        bikeVelocity.z = -Math.cos(bikeDirection) * moveDistance;
+        
+        // Update bike position
+        bikePosition.add(bikeVelocity);
+        
+        // Update player position to match bike
+        playerObject.position.copy(bikePosition);
+        
+        // Apply bank angle to camera (lean into turns)
+        cameraObject.rotation.z = bikeBankAngle;
+        
+        // Update bike model position and rotation (follows bike direction with banking)
+        if (bikeModel && bikeModel.visible) {
+            bikeModel.position.copy(bikePosition);
+            bikeModel.rotation.y = bikeDirection;
+            bikeModel.rotation.z = bikeBankAngle; // Bike leans into turns
+        }
+    } else {
+        // Calculate input direction in world space (only for walking)
+        direction.z = Number(moveForwardActual) - Number(moveBackwardActual);
+        direction.x = Number(moveLeftActual) - Number(moveRightActual);
+        direction.normalize();
+        
+        // Apply different physics for ground vs air movement
+        if (isOnGround) {
         // Ground movement: direct control with friction
         const groundFriction = 8.0;
         horizontalVelocity.x -= horizontalVelocity.x * groundFriction * delta;
@@ -4268,24 +4519,26 @@ function animate() {
         if (moveLeftActual || moveRightActual) {
             horizontalVelocity.x -= direction.x * currentSpeed * 12.0 * delta;
         }
-    } else {
-        // Air movement: limited control with momentum preservation
+        } else {
+            // Air movement: limited control with momentum preservation
         const airControl = 0.3; // Reduced air control
         const airFriction = 2.0; // Less friction in air
         
-        horizontalVelocity.x -= horizontalVelocity.x * airFriction * delta;
-        horizontalVelocity.z -= horizontalVelocity.z * airFriction * delta;
-        
-        // Limited air control
-        if (moveForwardActual || moveBackwardActual) {
-            horizontalVelocity.z -= direction.z * currentSpeed * airControl * 12.0 * delta;
-        }
-        if (moveLeftActual || moveRightActual) {
-            horizontalVelocity.x -= direction.x * currentSpeed * airControl * 12.0 * delta;
+            horizontalVelocity.x -= horizontalVelocity.x * airFriction * delta;
+            horizontalVelocity.z -= horizontalVelocity.z * airFriction * delta;
+            
+            // Limited air control
+            if (moveForwardActual || moveBackwardActual) {
+                horizontalVelocity.z -= direction.z * currentSpeed * airControl * 12.0 * delta;
+            }
+            if (moveLeftActual || moveRightActual) {
+                horizontalVelocity.x -= direction.x * currentSpeed * airControl * 12.0 * delta;
+            }
         }
     }
     
-    // Cap maximum horizontal speed
+    // Cap maximum horizontal speed (applies to both walking and bike modes)
+    if (!isOnBike) {
     const maxSpeed = currentSpeed * 1.2;
     const currentHorizontalSpeed = Math.sqrt(horizontalVelocity.x * horizontalVelocity.x + horizontalVelocity.z * horizontalVelocity.z);
     if (currentHorizontalSpeed > maxSpeed) {
@@ -4424,6 +4677,7 @@ function animate() {
     }
 
     if (gameMode === 'multiplayer' && time - lastSentStateTime > STATE_SEND_INTERVAL) { sendPlayerState(); lastSentStateTime = time; }
+    }
   } else { 
       horizontalVelocity.set(0,0,0);
       verticalVelocity = 0;
