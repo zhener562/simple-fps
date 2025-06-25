@@ -95,9 +95,9 @@ let horizontalVelocity = new THREE.Vector3(); // Persistent horizontal momentum
 let isOnBike = false;
 let bikeModel: THREE.Group | null = null;
 let bikeSpeed = 0;
-let bikeMaxSpeed = 20.0; // Much faster than walking
-let bikeAcceleration = 8.0;
-let bikeDeceleration = 12.0;
+let bikeMaxSpeed = 35.0; // Realistic motorcycle speed (increased from 20.0)
+let bikeAcceleration = 10.0; // Faster acceleration (increased from 8.0)
+let bikeDeceleration = 15.0; // Stronger braking (increased from 12.0)
 let bikeTurnSpeed = 2.0;
 let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
@@ -1803,9 +1803,11 @@ function toggleBike() {
         bikeBankAngle = 0;
         targetBankAngle = 0;
         
-        // Reset camera bank angle
+        // Reset camera banking (remove roll)
         if (controls) {
-            controls.getObject().rotation.z = 0;
+            const cameraObject = controls.getObject();
+            cameraObject.rotation.order = 'YXZ';
+            cameraObject.rotation.z = 0; // Remove banking
         }
         
         showTemporaryMessage("Bike OFF", 2000);
@@ -4490,8 +4492,14 @@ function animate() {
         // Update player position to match bike
         playerObject.position.copy(bikePosition);
         
-        // Apply bank angle to camera (lean into turns)
-        cameraObject.rotation.z = bikeBankAngle;
+        // Apply bank angle using a simpler approach that preserves camera control
+        // Store current camera rotations
+        const currentPitch = cameraObject.rotation.x;
+        const currentYaw = cameraObject.rotation.y;
+        
+        // Apply the banking by setting rotations in the correct order
+        cameraObject.rotation.order = 'YXZ'; // Yaw, then Pitch, then Roll
+        cameraObject.rotation.set(currentPitch, currentYaw, bikeBankAngle);
         
         // Update bike model position and rotation (follows bike direction with banking)
         if (bikeModel && bikeModel.visible) {
