@@ -579,3 +579,33 @@ canvas {
   box-shadow: 0 0 15px rgba(255, 153, 0, 0.5);
   font-size: 22px;
 }
+
+/* Speed Indicator */
+#speed-indicator {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.9);
+  color: #00ff88;
+  padding: 12px 18px;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  border: 2px solid #00ff88;
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.4);
+  z-index: 1000;
+  pointer-events: none;
+  text-align: center;
+  min-width: 80px;
+}
+
+#speed-value {
+  font-size: 24px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+#speed-unit {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 2px;
+}

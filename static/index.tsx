@@ -95,13 +95,32 @@ let horizontalVelocity = new THREE.Vector3(); // Persistent horizontal momentum
 let isOnBike = false;
 let bikeModel: THREE.Group | null = null;
 let bikeSpeed = 0;
-let bikeMaxSpeed = 35.0; // Realistic motorcycle speed (increased from 20.0)
-let bikeAcceleration = 10.0; // Faster acceleration (increased from 8.0)
-let bikeDeceleration = 15.0; // Stronger braking (increased from 12.0)
+// 1000cc Superbike physics parameters (realistic performance)
+let bikeEnginePower = 8000.0; // ~200hp converted to force at wheels (extremely powerful)
+let bikeAirDragCoefficient = 0.35; // Realistic aerodynamic coefficient for sports bike
+let bikeRollingResistance = 3.0; // Rolling resistance for high-performance tires
+let bikeMass = 180.0; // Lightweight superbike + rider (~200kg total, but more responsive)
+let bikeBrakingForce = 12000.0; // Racing-grade brakes (extremely powerful)
 let bikeTurnSpeed = 2.0;
 let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
 let bikeCanUseWeapons: string[] = ['handgun']; // Only handgun allowed on bike
+
+// Calculate theoretical maximum speed based on engine power and air resistance
+function calculateTheoreticalMaxSpeed(): number {
+    // Solve: enginePower = airDrag + rollingResistance
+    // enginePower = airDragCoeff * v^2 + rollingResistance * v
+    // This is a quadratic equation: airDragCoeff * v^2 + rollingResistance * v - enginePower = 0
+    const a = bikeAirDragCoefficient;
+    const b = bikeRollingResistance;
+    const c = -bikeEnginePower;
+    
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant < 0) return 30.0; // Fallback value
+    
+    const vMax = (-b + Math.sqrt(discriminant)) / (2 * a);
+    return Math.max(vMax, 20.0); // Minimum reasonable max speed
+}
 
 // Bike banking physics
 let bikeBankAngle = 0; // Current bank angle (lean angle) in radians
@@ -214,6 +233,23 @@ function updateZoomDisplay(): void {
     }
 }
 
+// Update speed indicator for bike
+function updateSpeedIndicator(): void {
+    if (!speedIndicator) return;
+    
+    if (isOnBike) {
+        // Convert bike speed to km/h (assuming game units are roughly meters/second)
+        const speedKmh = Math.abs(bikeSpeed * 3.6); // Convert m/s to km/h
+        const speedValue = document.getElementById('speed-value');
+        if (speedValue) {
+            speedValue.textContent = Math.round(speedKmh).toString();
+        }
+        speedIndicator.style.display = 'block';
+    } else {
+        speedIndicator.style.display = 'none';
+    }
+}
+
 // Get mouse sensitivity multiplier based on current zoom level
 function getMouseSensitivityMultiplier(): number {
     if (currentEquippedWeapon === 'sniper' && (isAimingWithMouseActual || isAimingWithKeyActual)) {
@@ -252,6 +288,7 @@ const startMultiplayerButton = document.getElementById('start-multiplayer') as H
 const instructionText = document.getElementById('instruction-text') as HTMLDivElement;
 const p2pInstructionText = document.getElementById('p2p-instruction') as HTMLParagraphElement;
 const scopeOverlay = document.getElementById('scope-overlay') as HTMLDivElement;
+const speedIndicator = document.getElementById('speed-indicator') as HTMLDivElement;
 
 
 // P2P Signaling UI Elements
@@ -4454,18 +4491,35 @@ function animate() {
     
     // Movement physics
     if (isOnBike) {
-        // Bike acceleration/deceleration
+        // Realistic bike physics: Force-based acceleration
+        let engineForce = 0;
+        
         if (bikeAccelerateActual) {
-            bikeSpeed = Math.min(bikeMaxSpeed, bikeSpeed + bikeAcceleration * delta);
+            // Apply engine power (forward force)
+            engineForce = bikeEnginePower;
         } else if (bikeDecelerateActual) {
-            bikeSpeed = Math.max(-bikeMaxSpeed * 0.5, bikeSpeed - bikeDeceleration * delta); // Allow reverse at half speed
-        } else {
-            // Natural deceleration when no input
-            if (bikeSpeed > 0) {
-                bikeSpeed = Math.max(0, bikeSpeed - bikeDeceleration * 0.8 * delta);
-            } else if (bikeSpeed < 0) {
-                bikeSpeed = Math.min(0, bikeSpeed + bikeDeceleration * 0.8 * delta);
-            }
+            // Apply braking force (backward force)
+            engineForce = -bikeBrakingForce;
+        }
+        
+        // Calculate air resistance (increases with speed squared)
+        const airDrag = bikeAirDragCoefficient * bikeSpeed * Math.abs(bikeSpeed);
+        
+        // Calculate rolling resistance (proportional to speed)
+        const rollingDrag = bikeRollingResistance * bikeSpeed;
+        
+        // Calculate net force (engine force minus all resistances)
+        const netForce = engineForce - airDrag - rollingDrag;
+        
+        // Calculate acceleration using F = ma
+        const acceleration = netForce / bikeMass;
+        
+        // Update speed (no artificial speed limits!)
+        bikeSpeed += acceleration * delta;
+        
+        // Only limit reverse speed for gameplay reasons
+        if (bikeSpeed < -15.0) {
+            bikeSpeed = -15.0; // Reasonable reverse speed limit
         }
         
         // Bike banking physics (lean into turns like a real bike)
@@ -4486,7 +4540,8 @@ function animate() {
         bikeBankAngle += Math.sign(bankDelta) * Math.min(Math.abs(bankDelta), currentBankSpeed * delta);
         
         // Calculate turn rate based on bank angle and speed (realistic physics)
-        const speedFactor = Math.abs(bikeSpeed) / bikeMaxSpeed; // 0 to 1
+        const theoreticalMaxSpeed = calculateTheoreticalMaxSpeed();
+        const speedFactor = Math.abs(bikeSpeed) / theoreticalMaxSpeed; // 0 to 1
         const turnRate = (bikeBankAngle * speedFactor * bikeTurnSpeed) / maxBankAngle;
         
         // Apply turning based on bank angle and speed
@@ -4723,6 +4778,7 @@ function animate() {
   updateMovementStatus();
   updateHealthRegeneration(delta);
   updateHealthDisplay();
+  updateSpeedIndicator(); // Update bike speed indicator
 
   renderer.render(scene, camera);
 }
