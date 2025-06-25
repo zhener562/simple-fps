@@ -101,7 +101,7 @@ let bikeAirDragCoefficient = 0.35; // Realistic aerodynamic coefficient for spor
 let bikeRollingResistance = 3.0; // Rolling resistance for high-performance tires
 let bikeMass = 180.0; // Lightweight superbike + rider (~200kg total, but more responsive)
 let bikeBrakingForce = 12000.0; // Racing-grade brakes (extremely powerful)
-let bikeTurnSpeed = 2.0;
+let bikeTurnSpeed = 4.0;
 let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
 let bikeCanUseWeapons: string[] = ['handgun']; // Only handgun allowed on bike
@@ -4539,13 +4539,16 @@ function animate() {
         const currentBankSpeed = (targetBankAngle === 0) ? bankReturnSpeed : bankSpeed;
         bikeBankAngle += Math.sign(bankDelta) * Math.min(Math.abs(bankDelta), currentBankSpeed * delta);
         
-        // Calculate turn rate based on bank angle and speed (realistic physics)
+        // Calculate turn rate based on bank angle and speed (improved responsiveness)
         const theoreticalMaxSpeed = calculateTheoreticalMaxSpeed();
         const speedFactor = Math.abs(bikeSpeed) / theoreticalMaxSpeed; // 0 to 1
-        const turnRate = (bikeBankAngle * speedFactor * bikeTurnSpeed) / maxBankAngle;
+        // Ensure minimum turning capability even at low speeds
+        const minTurnRate = 0.3; // Minimum 30% turning ability at any speed
+        const adjustedSpeedFactor = Math.max(minTurnRate, speedFactor);
+        const turnRate = (bikeBankAngle * adjustedSpeedFactor * bikeTurnSpeed) / maxBankAngle;
         
-        // Apply turning based on bank angle and speed
-        if (Math.abs(bikeSpeed) > 0.1) {
+        // Apply turning based on bank angle and speed (allow turning even at very low speeds)
+        if (Math.abs(bikeSpeed) > 0.01) {
             const actualTurnAmount = turnRate * delta;
             bikeDirection += actualTurnAmount;
             
@@ -4561,6 +4564,10 @@ function animate() {
         
         // Update bike position
         bikePosition.add(bikeVelocity);
+        
+        // Get terrain height at bike position for proper ground following
+        const terrainHeight = getTerrainHeightAt(bikePosition.x, bikePosition.z);
+        bikePosition.y = terrainHeight;
         
         // Update player position to match bike
         playerObject.position.copy(bikePosition);
