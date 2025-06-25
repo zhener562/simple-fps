@@ -3917,9 +3917,27 @@ function spawnProjectileInternal(muzzlePos: THREE.Vector3, projDir: THREE.Vector
   projectileMesh.castShadow = true;
   projectileMesh.position.copy(muzzlePos);
   
+  // Calculate base projectile velocity
+  const baseVelocity = finalProjDir.multiplyScalar(stats.projectileSpeed!);
+  
+  // Add player movement velocity for realistic ballistics
+  const playerMovementVelocity = new THREE.Vector3();
+  
+  if (isOnBike) {
+    // Add bike velocity to projectile
+    playerMovementVelocity.x = -Math.sin(bikeDirection) * bikeSpeed;
+    playerMovementVelocity.z = -Math.cos(bikeDirection) * bikeSpeed;
+  } else {
+    // Add walking velocity to projectile
+    playerMovementVelocity.copy(horizontalVelocity);
+  }
+  
+  // Combine base projectile velocity with player movement
+  const finalProjectileVelocity = baseVelocity.add(playerMovementVelocity);
+  
   const projectile: Projectile = {
     mesh: projectileMesh,
-    velocity: finalProjDir.multiplyScalar(stats.projectileSpeed!),
+    velocity: finalProjectileVelocity,
     lifeTime: 0,
     spawnTime: performance.now(),
     weaponType: weaponType,
