@@ -609,3 +609,33 @@ canvas {
   opacity: 0.8;
   margin-top: 2px;
 }
+
+/* Bike Durability Indicator */
+#bike-durability-indicator {
+  position: fixed;
+  bottom: 20px;
+  right: 120px; /* Position to the left of speed indicator */
+  background: rgba(0, 0, 0, 0.9);
+  color: #ff4444;
+  padding: 12px 18px;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  border: 2px solid #ff4444;
+  box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
+  z-index: 1000;
+  pointer-events: none;
+  text-align: center;
+  min-width: 80px;
+}
+
+#bike-durability-value {
+  font-size: 24px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+#bike-durability-unit {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 2px;
+}

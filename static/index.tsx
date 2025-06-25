@@ -106,6 +106,12 @@ let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
 let bikeCanUseWeapons: string[] = ['handgun']; // Only handgun allowed on bike
 
+// Bike damage and collision system
+let bikeHealth = 100.0; // Maximum bike durability
+let bikeMaxHealth = 100.0;
+let bikeLastCollisionTime = 0;
+let bikeCollisionCooldown = 100; // ms between collision checks to prevent spam
+
 // Calculate theoretical maximum speed based on engine power and air resistance
 function calculateTheoreticalMaxSpeed(): number {
     // Solve: enginePower = airDrag + rollingResistance
@@ -250,6 +256,33 @@ function updateSpeedIndicator(): void {
     }
 }
 
+// Update bike durability indicator
+function updateBikeDurabilityIndicator(): void {
+    const bikeDurabilityIndicator = document.getElementById('bike-durability-indicator');
+    if (!bikeDurabilityIndicator) return;
+    
+    if (isOnBike) {
+        const durabilityValue = document.getElementById('bike-durability-value');
+        if (durabilityValue) {
+            durabilityValue.textContent = Math.round(bikeHealth).toString();
+        }
+        
+        // Change color based on damage level
+        const healthPercentage = bikeHealth / bikeMaxHealth;
+        if (healthPercentage > 0.6) {
+            bikeDurabilityIndicator.style.color = '#00ff00'; // Green
+        } else if (healthPercentage > 0.3) {
+            bikeDurabilityIndicator.style.color = '#ffff00'; // Yellow
+        } else {
+            bikeDurabilityIndicator.style.color = '#ff0000'; // Red
+        }
+        
+        bikeDurabilityIndicator.style.display = 'block';
+    } else {
+        bikeDurabilityIndicator.style.display = 'none';
+    }
+}
+
 // Get mouse sensitivity multiplier based on current zoom level
 function getMouseSensitivityMultiplier(): number {
     if (currentEquippedWeapon === 'sniper' && (isAimingWithMouseActual || isAimingWithKeyActual)) {
@@ -352,6 +385,7 @@ let remotePlayerMesh: THREE.Group | null = null;
 let remotePlayerHandgunMesh: THREE.Mesh | null = null;
 let remotePlayerSniperMesh: THREE.Mesh | null = null;
 let remotePlayerSMGMesh: THREE.Mesh | null = null;
+let remotePlayerBikeModel: THREE.Group | null = null;
 
 
 // Constants for humanoid remote player model parts
@@ -491,7 +525,223 @@ function adjustSpawnPointToTerrain(spawnPoint: THREE.Vector3): THREE.Vector3 {
     }
     return spawnPoint.clone();
 }
+
+// Bike collision detection and damage system
+function checkBikeCollisions(): void {
+    if (!isOnBike) return;
+    
+    const currentTime = Date.now();
+    if (currentTime - bikeLastCollisionTime < bikeCollisionCooldown) return;
+    
+    // Create collision sphere around bike
+    const bikeRadius = 2.0;
+    const bikeBounds = new THREE.Sphere(bikePosition, bikeRadius);
+    
+    // Check collision with all scene objects
+    const collidableObjects: THREE.Object3D[] = [];
+    
+    // Add map features as collision objects (buildings, obstacles, etc.)
+    if (mapFeatures && mapFeatures.length > 0) {
+        collidableObjects.push(...mapFeatures);
+    }
+    
+    // Add terrain meshes for mountain maps
+    if (currentMapType === MapType.MOUNTAIN && cachedTerrainMeshes.length > 0) {
+        collidableObjects.push(...cachedTerrainMeshes);
+    }
+    
+    // Add ground mesh
+    if (groundMesh) {
+        collidableObjects.push(groundMesh);
+    }
+    
+    // Check collisions with each object (limit to prevent performance issues)
+    let checkedObjects = 0;
+    const maxObjectsToCheck = 20; // Limit collision checks per frame
+    
+    for (const obj of collidableObjects) {
+        if (checkedObjects >= maxObjectsToCheck) break;
+        if (obj.userData.isCollidable === false) continue;
+        
+        // Quick distance check first (cheaper than full bounds calculation)
+        const objPosition = obj.position;
+        const distance = bikePosition.distanceTo(objPosition);
+        if (distance > bikeRadius + 5) { // Skip if clearly too far
+            continue;
+        }
+        
+        checkedObjects++;
+        
+        // Get object bounds only if distance check passes
+        const objBounds = new THREE.Box3().setFromObject(obj);
+        
+        // Check if bike sphere intersects with object bounds
+        if (bikeBounds.intersectsBox(objBounds)) {
+            // Calculate damage based on speed
+            const speedKmh = Math.abs(bikeSpeed) * 3.6; // Convert to km/h
+            const damage = calculateBikeCrashDamage(speedKmh);
+            
+            if (damage > 0) {
+                applyBikeDamage(damage, speedKmh);
+                bikeLastCollisionTime = currentTime;
+                
+                // Reduce bike speed significantly after collision
+                bikeSpeed *= 0.3;
+                break; // Only process one collision per frame
+            }
+        }
+    }
+}
+
+// Calculate crash damage based on speed
+function calculateBikeCrashDamage(speedKmh: number): number {
+    if (speedKmh < 10) return 0; // No damage at very low speeds
+    if (speedKmh < 30) return 10; // Minor damage
+    if (speedKmh < 60) return 25; // Moderate damage
+    if (speedKmh < 100) return 50; // Major damage
+    return 80; // Critical damage at high speeds
+}
+
+// Apply damage to bike and handle destruction
+function applyBikeDamage(damage: number, speedKmh: number): void {
+    bikeHealth -= damage;
+    
+    // Visual feedback for damage
+    if (bikeModel) {
+        const originalColor = bikeModel.userData.originalColor || 0x333333;
+        bikeModel.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                if (!child.userData.originalColor) {
+                    child.userData.originalColor = (child.material as THREE.MeshStandardMaterial).color.getHex();
+                }
+                (child.material as THREE.MeshStandardMaterial).color.setHex(0xff0000);
+            }
+        });
+        
+        // Restore color after brief flash
+        setTimeout(() => {
+            if (bikeModel) {
+                bikeModel.traverse((child) => {
+                    if (child instanceof THREE.Mesh && child.userData.originalColor) {
+                        (child.material as THREE.MeshStandardMaterial).color.setHex(child.userData.originalColor);
+                    }
+                });
+            }
+        }, 200);
+    }
+    
+    // Check if bike is destroyed
+    if (bikeHealth <= 0) {
+        explodeBike(speedKmh);
+    }
+}
+
+// Create explosion effect and kill player
+function explodeBike(speedKmh: number): void {
+    // Create explosion effect
+    createExplosionEffect(bikePosition);
+    
+    // Kill player with fatal damage
+    takeDamage(currentHealth);
+    
+    // Handle death and respawn logic
+    if (currentHealth <= 0) {
+        // Sync health systems
+        playerHealth = Math.round(currentHealth);
+        
+        // Handle multiplayer death event
+        if (gameMode === 'multiplayer') {
+            sendGameEvent({ type: 'i_was_defeated' });
+            if (opponentScore >= KILLS_TO_WIN) {
+                handleGameOver(false);
+                return;
+            }
+        }
+        
+        // Reset health and trigger respawn
+        currentHealth = MAX_HEALTH;
+        playerHealth = PLAYER_MAX_HEALTH;
+        triggerRespawn();
+    }
+    
+    // Note: Bike model removal and state reset is handled in triggerRespawn()
+    // to avoid duplicate processing and ensure consistent state management
+}
+
+// Create explosion visual effect
+function createExplosionEffect(position: THREE.Vector3): void {
+    // Create explosion sphere
+    const explosionGeometry = new THREE.SphereGeometry(5, 16, 16);
+    const explosionMaterial = new THREE.MeshStandardMaterial({
+        color: 0xff4400,
+        emissive: 0xff2200,
+        transparent: true,
+        opacity: 0.8
+    });
+    
+    const explosionMesh = new THREE.Mesh(explosionGeometry, explosionMaterial);
+    explosionMesh.position.copy(position);
+    scene.add(explosionMesh);
+    
+    // Animate explosion
+    let explosionScale = 0.1;
+    let explosionOpacity = 0.8;
+    const explosionInterval = setInterval(() => {
+        explosionScale += 0.5;
+        explosionOpacity -= 0.1;
+        
+        explosionMesh.scale.setScalar(explosionScale);
+        explosionMaterial.opacity = Math.max(0, explosionOpacity);
+        
+        if (explosionOpacity <= 0) {
+            clearInterval(explosionInterval);
+            scene.remove(explosionMesh);
+            explosionGeometry.dispose();
+            explosionMaterial.dispose();
+        }
+    }, 50);
+    
+    // Create debris particles
+    for (let i = 0; i < 10; i++) {
+        const debrisGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        const debrisMaterial = new THREE.MeshStandardMaterial({
+            color: 0x333333
+        });
+        
+        const debris = new THREE.Mesh(debrisGeometry, debrisMaterial);
+        debris.position.copy(position);
+        debris.position.add(new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            Math.random() * 2,
+            (Math.random() - 0.5) * 2
+        ));
+        
+        scene.add(debris);
+        
+        // Animate debris
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 10,
+            Math.random() * 10,
+            (Math.random() - 0.5) * 10
+        );
+        
+        let debrisLife = 2000; // 2 seconds
+        const debrisInterval = setInterval(() => {
+            debris.position.add(velocity.clone().multiplyScalar(0.05));
+            velocity.y -= 0.2; // Gravity
+            debrisLife -= 50;
+            
+            if (debrisLife <= 0) {
+                clearInterval(debrisInterval);
+                scene.remove(debris);
+                debrisGeometry.dispose();
+                debrisMaterial.dispose();
+            }
+        }, 50);
+    }
+}
 const mapFeatures: THREE.Mesh[] = [];
+const buildingMeshes: THREE.Object3D[] = []; // Store building meshes for collision detection
 const terrainMeshes: THREE.Object3D[] = []; // Store terrain meshes separately from collision objects
 let cachedTerrainMeshes: THREE.Mesh[] = []; // Cache terrain meshes for performance
 const arenaMapFeatureMaterial = new THREE.MeshStandardMaterial({ color: 0x607D8B, roughness: 0.8, metalness: 0.2 });
@@ -573,6 +823,10 @@ interface PlayerState {
   quaternion: { x: number; y: number; z: number; w: number };
   aiming: boolean;
   weaponType: 'handgun' | 'sniper' | 'smg';
+  isOnBike: boolean;
+  bikeDirection?: number;
+  bikeBankAngle?: number;
+  bikePosition?: { x: number; y: number; z: number };
 }
 
 interface GameEventShootData {
@@ -1303,6 +1557,7 @@ function resetGameScene() {
         }
     });
     mapFeatures.length = 0;
+    buildingMeshes.length = 0; // Clear building meshes array
     
     // Clean up terrain meshes
     terrainMeshes.forEach(terrain => {
@@ -1410,46 +1665,133 @@ function createHandgunModel(): {model: THREE.Group, muzzlePoint: THREE.Object3D}
 
 function createBikeModel(): THREE.Group {
     const bikeGrp = new THREE.Group();
-    const bikeMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.8, roughness: 0.2 });
-    const redMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.6, roughness: 0.3 });
     
-    // Main body frame
-    const frameGeometry = new THREE.BoxGeometry(0.1, 0.6, 1.8);
-    const frameMesh = new THREE.Mesh(frameGeometry, bikeMaterial);
-    frameMesh.position.y = 0.4;
-    frameMesh.castShadow = true;
-    bikeGrp.add(frameMesh);
+    // Use improved fallback model only for now
+    createFallbackBikeModel(bikeGrp);
+    console.log('Using fallback bike model');
     
-    // Wheels
-    const wheelGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 12);
-    const frontWheel = new THREE.Mesh(wheelGeometry, bikeMaterial);
-    frontWheel.position.set(0, 0.3, -0.7);
+    return bikeGrp;
+}
+
+function recreateBikeModel(): void {
+    // Remove existing bike model if it exists
+    if (bikeModel) {
+        scene.remove(bikeModel);
+        bikeModel.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(mat => mat.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            }
+        });
+    }
+    
+    // Create new bike model
+    bikeModel = createBikeModel();
+    bikeModel.visible = false;
+    scene.add(bikeModel);
+    console.log('Bike model recreated');
+}
+
+function createFallbackBikeModel(bikeGrp: THREE.Group): void {
+    console.log('Creating enhanced fallback bike model');
+    
+    // Materials
+    const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x0066cc, metalness: 0.8, roughness: 0.2 }); // Blue frame
+    const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.3, roughness: 0.8 }); // Dark wheels
+    const seatMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.6, roughness: 0.3 }); // Red seat
+    const handlebarMaterial = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.1 }); // Chrome handlebars
+    
+    // Main frame - motorcycle-like shape (lower)
+    const mainFrameGeometry = new THREE.BoxGeometry(0.4, 0.6, 4.0);
+    const mainFrame = new THREE.Mesh(mainFrameGeometry, frameMaterial);
+    mainFrame.position.set(0, 0.6, 0); // Lower frame
+    mainFrame.castShadow = true;
+    bikeGrp.add(mainFrame);
+    
+    // Front wheel (smaller) - swapped to negative Z
+    const frontWheelGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.25, 16);
+    const frontWheel = new THREE.Mesh(frontWheelGeometry, wheelMaterial);
+    frontWheel.position.set(0, 0.5, -1.8); // Front wheel now at negative Z
     frontWheel.rotation.z = Math.PI / 2;
     frontWheel.castShadow = true;
     bikeGrp.add(frontWheel);
     
-    const backWheel = new THREE.Mesh(wheelGeometry, bikeMaterial);
-    backWheel.position.set(0, 0.3, 0.7);
+    // Back wheel (smaller) - swapped to positive Z
+    const backWheel = new THREE.Mesh(frontWheelGeometry, wheelMaterial);
+    backWheel.position.set(0, 0.5, 1.8); // Back wheel now at positive Z
     backWheel.rotation.z = Math.PI / 2;
     backWheel.castShadow = true;
     bikeGrp.add(backWheel);
     
-    // Handlebars
-    const handlebarGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8);
-    const handlebarMesh = new THREE.Mesh(handlebarGeometry, bikeMaterial);
-    handlebarMesh.position.set(0, 1.0, -0.5);
+    // Engine block (middle, lower)
+    const engineGeometry = new THREE.BoxGeometry(0.6, 0.5, 1.2);
+    const engineMesh = new THREE.Mesh(engineGeometry, frameMaterial);
+    engineMesh.position.set(0, 0.4, 0); // Lower engine
+    engineMesh.castShadow = true;
+    bikeGrp.add(engineMesh);
+    
+    // Handlebars (lower) - moved to front (negative Z)
+    const handlebarGeometry = new THREE.CylinderGeometry(0.03, 0.03, 1.2, 8);
+    const handlebarMesh = new THREE.Mesh(handlebarGeometry, handlebarMaterial);
+    handlebarMesh.position.set(0, 1.4, -1.4); // Handlebars at front (negative Z)
     handlebarMesh.rotation.z = Math.PI / 2;
     handlebarMesh.castShadow = true;
     bikeGrp.add(handlebarMesh);
     
-    // Seat
-    const seatGeometry = new THREE.BoxGeometry(0.4, 0.1, 0.3);
-    const seatMesh = new THREE.Mesh(seatGeometry, redMaterial);
-    seatMesh.position.set(0, 0.8, 0.2);
+    // Seat (proper height for 1.8m player) - moved to back (positive Z)
+    const seatGeometry = new THREE.BoxGeometry(0.6, 0.1, 1.0);
+    const seatMesh = new THREE.Mesh(seatGeometry, seatMaterial);
+    seatMesh.position.set(0, 1.0, 0.5); // Seat at back (positive Z)
     seatMesh.castShadow = true;
     bikeGrp.add(seatMesh);
     
-    return bikeGrp;
+    // Front windscreen/fairing (lower) - moved to front (negative Z)
+    const windscreenGeometry = new THREE.BoxGeometry(0.6, 0.8, 0.1);
+    const windscreenMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x0099ff, 
+        transparent: true,
+        opacity: 0.7,
+        metalness: 0.1,
+        roughness: 0.1 
+    });
+    const windscreen = new THREE.Mesh(windscreenGeometry, windscreenMaterial);
+    windscreen.position.set(0, 1.2, -1.6); // Windscreen at front (negative Z)
+    windscreen.castShadow = true;
+    bikeGrp.add(windscreen);
+    
+    // Bright headlight (front indicator, lower) - moved to front (negative Z)
+    const headlightGeometry = new THREE.SphereGeometry(0.2);
+    const headlightMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xffffaa, 
+        emissive: 0xffff44,
+        emissiveIntensity: 0.8
+    });
+    const headlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+    headlight.position.set(0, 0.8, -2.1); // Headlight at front (negative Z)
+    headlight.castShadow = true;
+    bikeGrp.add(headlight);
+    
+    // Rear light (lower) - moved to back (positive Z)
+    const rearLightGeometry = new THREE.SphereGeometry(0.12);
+    const rearLightMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xff0000, 
+        emissive: 0x440000,
+        emissiveIntensity: 0.5
+    });
+    const rearLight = new THREE.Mesh(rearLightGeometry, rearLightMaterial);
+    rearLight.position.set(0, 1.0, 2.0); // Taillight at back (positive Z)
+    rearLight.castShadow = true;
+    bikeGrp.add(rearLight);
+    
+    // No rotation needed - bike faces correct direction by default
+    
+    console.log('Enhanced fallback bike model created with', bikeGrp.children.length, 'parts');
 }
 
 function createSniperRifleModel(): {model: THREE.Group, muzzlePoint: THREE.Object3D} {
@@ -1810,11 +2152,17 @@ function toggleBike() {
         bikeDirection = playerObject.rotation.y; // Store initial direction for A/D turning
         bikeSpeed = 0;
         
+        // Create new bike model if it doesn't exist or recreate if outdated
+        if (!bikeModel) {
+            recreateBikeModel();
+        }
+        
         // Show bike model
         if (bikeModel) {
             bikeModel.visible = true;
             bikeModel.position.copy(bikePosition);
-            bikeModel.rotation.y = bikeDirection; // Use bike direction
+            bikeModel.position.y += 0.5; // Raise bike by wheel radius to sit on ground properly
+            bikeModel.rotation.y = bikeDirection;
         }
         
         // Force switch to handgun when getting on bike
@@ -1822,12 +2170,15 @@ function toggleBike() {
             equipWeapon('handgun');
         }
         
+        console.log("Bike mode ON - Position:", bikePosition, "Direction:", bikeDirection);
         showTemporaryMessage("Bike ON - W/S: Accelerate/Brake, A/D: Turn", 3000);
     } else {
         // Hide bike model
         if (bikeModel) {
             bikeModel.visible = false;
         }
+        
+        console.log("Bike mode OFF");
         
         // Reset bike state when getting off
         bikeSpeed = 0;
@@ -1994,9 +2345,7 @@ function initThreeJSGame() {
   camera.add(smgModel);
   
   // Create bike model (initially hidden)
-  bikeModel = createBikeModel();
-  bikeModel.visible = false;
-  scene.add(bikeModel);
+  recreateBikeModel();
   
   populateWeaponStatsDB(); 
   equipWeapon('handgun'); 
@@ -2043,6 +2392,7 @@ function generateArenaMap() {
         obstacle.name = `arena_obstacle_${i}`;
         scene.add(obstacle);
         mapFeatures.push(obstacle);
+        buildingMeshes.push(obstacle); // Add to building meshes for collision detection
     }
 
     const numRamps = prng.nextInt(2, 3);
@@ -2074,7 +2424,8 @@ function generateArenaMap() {
         ramp.receiveShadow = true;
         ramp.name = `arena_ramp_${i}`;
         scene.add(rampWrapper);
-        mapFeatures.push(ramp); 
+        mapFeatures.push(ramp);
+        buildingMeshes.push(ramp); // Add to building meshes for collision detection 
     }
 }
 
@@ -2122,6 +2473,7 @@ function generateUrbanMap() {
         building.name = `urban_building_${i}`;
         scene.add(building);
         mapFeatures.push(building);
+        buildingMeshes.push(building); // Add to building meshes for collision detection
     }
 
     const numStreetObstacles = prng.nextInt(10, 18);
@@ -2166,6 +2518,7 @@ function generateUrbanMap() {
         obstacle.name = `urban_obstacle_${i}`;
         scene.add(obstacle);
         mapFeatures.push(obstacle);
+        buildingMeshes.push(obstacle); // Add to building meshes for collision detection
     }
 }
 
@@ -2209,7 +2562,8 @@ function generateForestMap() {
         treeGroup.add(foliageMesh);
         
         mapFeatures.push(trunkMesh); 
-        mapFeatures.push(foliageMesh); 
+        mapFeatures.push(foliageMesh);
+        buildingMeshes.push(trunkMesh); // Add tree trunk to building meshes for collision detection 
 
         treeGroup.position.x = prng.randFloat(forestBounds.minX, forestBounds.maxX);
         treeGroup.position.z = prng.randFloat(forestBounds.minZ, forestBounds.maxZ);
@@ -2255,6 +2609,7 @@ function generateForestMap() {
         rock.name = `forest_rock_${i}`;
         scene.add(rock);
         mapFeatures.push(rock);
+        buildingMeshes.push(rock); // Add to building meshes for collision detection
     }
 
     const numBushes = prng.nextInt(8, 15);
@@ -2331,6 +2686,7 @@ function generatePlainsMap() {
         
         scene.add(rockGroup);
         mapFeatures.push(rockGroup);
+        buildingMeshes.push(rockGroup); // Add to building meshes for collision detection
     }
     
     // Scattered individual trees for long-range reference points
@@ -2363,6 +2719,7 @@ function generatePlainsMap() {
         
         scene.add(treeGroup);
         mapFeatures.push(treeGroup);
+        buildingMeshes.push(treeGroup); // Add to building meshes for collision detection
     }
     
     // Small bushes and grass clumps for minor cover
@@ -2544,6 +2901,7 @@ function addProceduralMountainElements() {
         boulderMesh.receiveShadow = true;
         scene.add(boulderMesh);
         mapFeatures.push(boulderMesh);
+        buildingMeshes.push(boulderMesh); // Add to building meshes for collision detection
     }
 
     // Add sparse mountain trees
@@ -2574,6 +2932,7 @@ function addProceduralMountainElements() {
         trunkMesh.castShadow = true;
         scene.add(trunkMesh);
         mapFeatures.push(trunkMesh);
+        buildingMeshes.push(trunkMesh); // Add to building meshes for collision detection
         
         // Tree foliage
         const foliageGeometry = new THREE.ConeGeometry(treeRadius, treeHeight * 0.6, 8);
@@ -2649,6 +3008,7 @@ function generateMapFeatures() {
         }
     });
     mapFeatures.length = 0;
+    buildingMeshes.length = 0; // Clear building meshes array
     
     // Clean up terrain meshes
     terrainMeshes.forEach(terrain => {
@@ -2886,6 +3246,24 @@ function setupMultiplayerSceneElements() {
   if (remotePlayerHandgunMesh && remotePlayerHandgunMesh.parent) remotePlayerHandgunMesh.parent.remove(remotePlayerHandgunMesh);
   if (remotePlayerSniperMesh && remotePlayerSniperMesh.parent) remotePlayerSniperMesh.parent.remove(remotePlayerSniperMesh);
   if (remotePlayerSMGMesh && remotePlayerSMGMesh.parent) remotePlayerSMGMesh.parent.remove(remotePlayerSMGMesh);
+  
+  // Clean up remote bike model
+  if (remotePlayerBikeModel) {
+      scene.remove(remotePlayerBikeModel);
+      remotePlayerBikeModel.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+              if (child.geometry) child.geometry.dispose();
+              if (child.material) {
+                  if (Array.isArray(child.material)) {
+                      child.material.forEach(mat => mat.dispose());
+                  } else {
+                      child.material.dispose();
+                  }
+              }
+          }
+      });
+      remotePlayerBikeModel = null;
+  }
 
 
   const remotePlayerMaterial = new THREE.MeshStandardMaterial({ color: 0xff4500, roughness: 0.6, metalness: 0.3 });
@@ -3078,8 +3456,14 @@ function setupDataChannelEvents() {
                     const terrainHeight = getTerrainHeightAt(state.position.x, state.position.z);
                     adjustedY = Math.max(adjustedY, terrainHeight);
                 }
-                remotePlayerMesh.position.set(state.position.x, adjustedY, state.position.z);
-                remotePlayerMesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+                
+                // Set position and rotation only if NOT in bike mode (will be overridden later)
+                if (!state.isOnBike) {
+                    remotePlayerMesh.position.set(state.position.x, adjustedY, state.position.z);
+                    
+                    // Keep remote player always upright (only Y-axis rotation for direction)
+                    remotePlayerMesh.rotation.set(0, state.quaternion.y * 2, 0); // Simple Y rotation approximation
+                }
 
                 if (remotePlayerHandgunMesh && remotePlayerSniperMesh && remotePlayerSMGMesh) {
                     remotePlayerHandgunMesh.visible = state.weaponType === 'handgun';
@@ -3117,6 +3501,74 @@ function setupDataChannelEvents() {
                             activeRemoteGunMesh.rotation.set(hipRotX, 0, hipRotZ); 
                         }
                     }
+                }
+
+                // Handle bike mode synchronization
+                if (state.isOnBike) {
+                    console.log("Received bike state:", {
+                        isOnBike: state.isOnBike,
+                        bikePosition: state.bikePosition,
+                        bikeDirection: state.bikeDirection,
+                        bikeBankAngle: state.bikeBankAngle
+                    });
+                    
+                    // Create remote bike model if it doesn't exist
+                    if (!remotePlayerBikeModel) {
+                        remotePlayerBikeModel = createBikeModel();
+                        remotePlayerBikeModel.name = "remoteBike";
+                        scene.add(remotePlayerBikeModel);
+                        console.log("Created remote bike model");
+                    }
+                    
+                    // Use bike position if available, otherwise fall back to player position
+                    const bikePos = state.bikePosition || state.position;
+                    let bikeY = bikePos.y;
+                    
+                    // For bike mode, trust the sent position more and apply minimal adjustment
+                    if (currentMapType === MapType.MOUNTAIN && state.bikePosition) {
+                        // Only apply terrain adjustment if significantly below expected height
+                        const terrainHeight = getTerrainHeightAt(bikePos.x, bikePos.z);
+                        bikeY = Math.max(bikeY, terrainHeight - 1); // Allow slightly below terrain
+                    }
+                    
+                    // Show and position remote bike
+                    remotePlayerBikeModel.visible = true;
+                    remotePlayerBikeModel.position.set(bikePos.x, bikeY, bikePos.z);
+                    
+                    // Apply bike direction and banking (add 180° for correct orientation)
+                    if (state.bikeDirection !== undefined) {
+                        remotePlayerBikeModel.rotation.y = state.bikeDirection + Math.PI;
+                    }
+                    if (state.bikeBankAngle !== undefined) {
+                        remotePlayerBikeModel.rotation.z = state.bikeBankAngle;
+                    }
+                    
+                    // Position remote player on the bike (match bike height)
+                    remotePlayerMesh.position.set(bikePos.x, bikeY, bikePos.z);
+                    
+                    // For bike mode, only apply basic orientation - avoid complex rotations
+                    if (state.bikeDirection !== undefined) {
+                        // Simple Y rotation for body direction (add 180° to match bike orientation)
+                        remotePlayerMesh.rotation.set(0, state.bikeDirection + Math.PI, 0);
+                    }
+                    
+                    // Apply only slight banking to avoid weird rotations
+                    if (state.bikeBankAngle !== undefined) {
+                        remotePlayerMesh.rotation.z = state.bikeBankAngle * 0.3; // Reduced banking effect
+                    }
+                    
+                    console.log("Updated remote bike position:", remotePlayerBikeModel.position);
+                } else {
+                    // Hide remote bike when not in bike mode
+                    if (remotePlayerBikeModel) {
+                        remotePlayerBikeModel.visible = false;
+                    }
+                    
+                    // Apply normal position and rotation when not on bike
+                    remotePlayerMesh.position.set(state.position.x, adjustedY, state.position.z);
+                    
+                    // Keep remote player always upright (only Y-axis rotation for direction)
+                    remotePlayerMesh.rotation.set(0, state.quaternion.y * 2, 0); // Simple Y rotation approximation
                 }
 
             } else if (message.type === 'gameEvent') {
@@ -3397,12 +3849,31 @@ async function addRemoteIceCandidate() {
 function sendPlayerState() {
     if (dataChannel && dataChannel.readyState === 'open' && controls.isLocked && !isGameOver) {
         const playerObject = controls.getObject();
+        
+        // Use bike position when on bike, otherwise use player position
+        const currentPosition = isOnBike ? bikePosition : playerObject.position;
+        
         const state: PlayerState = {
-            position: { x: playerObject.position.x, y: playerObject.position.y, z: playerObject.position.z }, 
-            quaternion: { x: camera.quaternion.x, y: camera.quaternion.y, z: camera.quaternion.z, w: camera.quaternion.w },
+            position: { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z }, 
+            quaternion: { x: playerObject.quaternion.x, y: playerObject.quaternion.y, z: playerObject.quaternion.z, w: playerObject.quaternion.w },
             aiming: isAimingWithMouseActual || isAimingWithKeyActual,
             weaponType: currentEquippedWeapon,
+            isOnBike: isOnBike,
+            bikeDirection: isOnBike ? bikeDirection : undefined,
+            bikeBankAngle: isOnBike ? bikeBankAngle : undefined,
+            bikePosition: isOnBike ? { x: bikePosition.x, y: bikePosition.y, z: bikePosition.z } : undefined,
         };
+        
+        // Debug log for bike mode
+        if (isOnBike) {
+            console.log("Sending bike state:", {
+                isOnBike: state.isOnBike,
+                bikePosition: state.bikePosition,
+                bikeDirection: state.bikeDirection,
+                bikeBankAngle: state.bikeBankAngle
+            });
+        }
+        
         try {
             dataChannel.send(JSON.stringify({ type: 'playerState', data: state }));
         } catch (e) {
@@ -3457,6 +3928,28 @@ function triggerRespawn() {
     
     if(pitchObject) {
         pitchObject.rotation.x = 0; 
+    }
+    
+    // Reset bike state on respawn
+    if (isOnBike) {
+        // Remove bike from scene
+        if (bikeModel) {
+            scene.remove(bikeModel);
+            bikeModel = null;
+        }
+        
+        // Exit bike mode
+        isOnBike = false;
+        
+        // Reset bike state
+        bikeHealth = bikeMaxHealth;
+        bikeSpeed = 0;
+        
+        // Hide bike UI elements
+        const speedometer = document.getElementById('speedometer');
+        const bikeDurability = document.getElementById('bike-durability');
+        if (speedometer) speedometer.style.display = 'none';
+        if (bikeDurability) bikeDurability.style.display = 'none';
     }
     
     velocity.set(0,0,0);
@@ -4525,7 +5018,7 @@ function animate() {
         // Bike banking physics (lean into turns like a real bike)
         const cameraObject = controls.getObject();
         
-        // Set target bank angle based on input (corrected direction)
+        // Set target bank angle based on input (original direction)
         if (bikeTurnLeftActual) {
             targetBankAngle = maxBankAngle; // Lean right (into left turn)
         } else if (bikeTurnRightActual) {
@@ -4567,10 +5060,11 @@ function animate() {
         
         // Get terrain height at bike position for proper ground following
         const terrainHeight = getTerrainHeightAt(bikePosition.x, bikePosition.z);
-        bikePosition.y = terrainHeight;
+        bikePosition.y = terrainHeight - PLAYER_HEIGHT; // Subtract player height to get actual ground level
         
-        // Update player position to match bike
+        // Update player position to match bike (seated position)
         playerObject.position.copy(bikePosition);
+        playerObject.position.y += 2.3; // Raise player to seat height (1.0m above bike center)
         
         // Apply bank angle using a simpler approach that preserves camera control
         // Store current camera rotations
@@ -4584,9 +5078,13 @@ function animate() {
         // Update bike model position and rotation (follows bike direction with banking)
         if (bikeModel && bikeModel.visible) {
             bikeModel.position.copy(bikePosition);
+            bikeModel.position.y += 0.5; // Raise bike by wheel radius to sit on ground properly
             bikeModel.rotation.y = bikeDirection;
             bikeModel.rotation.z = bikeBankAngle; // Bike leans into turns
         }
+        
+        // Check for bike collisions
+        checkBikeCollisions();
     } else {
         // Calculate input direction in world space (only for walking)
         direction.z = Number(moveForwardActual) - Number(moveBackwardActual);
@@ -4764,7 +5262,6 @@ function animate() {
         pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, finalPitch));
     }
 
-    if (gameMode === 'multiplayer' && time - lastSentStateTime > STATE_SEND_INTERVAL) { sendPlayerState(); lastSentStateTime = time; }
     }
   } else { 
       horizontalVelocity.set(0,0,0);
@@ -4774,6 +5271,12 @@ function animate() {
           let finalPitch = basePitchByMouse - cameraPitchRecoil;
           pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, finalPitch));
       }
+  }
+  
+  // Send player state for multiplayer (works for both bike and walking modes)
+  if (gameMode === 'multiplayer' && time - lastSentStateTime > STATE_SEND_INTERVAL) { 
+      sendPlayerState(); 
+      lastSentStateTime = time; 
   }
   
   updateWeaponDynamics(delta); 
@@ -4786,6 +5289,7 @@ function animate() {
   updateHealthRegeneration(delta);
   updateHealthDisplay();
   updateSpeedIndicator(); // Update bike speed indicator
+  updateBikeDurabilityIndicator(); // Update bike durability indicator
 
   renderer.render(scene, camera);
 }
