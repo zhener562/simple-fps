@@ -552,3 +552,30 @@ canvas {
     box-shadow: 0 0 15px rgba(255, 0, 0, 0.8);
   }
 }
+
+/* Scope Zoom Display */
+#zoom-display {
+  position: fixed;
+  top: 120px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.9);
+  color: #00ff00;
+  padding: 10px 15px;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 20px;
+  font-weight: bold;
+  border: 2px solid #00ff00;
+  box-shadow: 0 0 12px rgba(0, 255, 0, 0.4);
+  z-index: 10;
+  transition: all 0.2s ease;
+}
+
+/* High zoom emphasis */
+#zoom-display[data-zoom="8x"],
+#zoom-display[data-zoom="16x"] {
+  color: #ff9900;
+  border-color: #ff9900;
+  box-shadow: 0 0 15px rgba(255, 153, 0, 0.5);
+  font-size: 22px;
+}

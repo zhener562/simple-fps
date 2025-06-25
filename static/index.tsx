@@ -162,6 +162,44 @@ let weaponStatsDB: Record<string, Partial<WeaponStats>> = {}; // Will be populat
 const NORMAL_FOV = 75;
 const ADS_TRANSITION_SPEED = 10.0;
 
+// Scope zoom levels
+const SCOPE_ZOOM_LEVELS = [2, 4, 8, 16]; // 2x, 4x, 8x, 16x magnification
+const SCOPE_BASE_FOV = 40; // Base FOV for 2x zoom
+let currentScopeZoomIndex = 0; // Index in SCOPE_ZOOM_LEVELS array
+
+// Calculate current scope FOV based on zoom level
+function getCurrentScopeFOV(): number {
+    const zoomLevel = SCOPE_ZOOM_LEVELS[currentScopeZoomIndex];
+    return SCOPE_BASE_FOV / zoomLevel;
+}
+
+// Cycle to next zoom level
+function cycleScopeZoom(): void {
+    currentScopeZoomIndex = (currentScopeZoomIndex + 1) % SCOPE_ZOOM_LEVELS.length;
+    updateZoomDisplay();
+}
+
+// Update zoom level display
+function updateZoomDisplay(): void {
+    const zoomDisplay = document.getElementById('zoom-display');
+    if (zoomDisplay) {
+        const currentZoom = SCOPE_ZOOM_LEVELS[currentScopeZoomIndex];
+        zoomDisplay.textContent = `${currentZoom}x`;
+        zoomDisplay.setAttribute('data-zoom', `${currentZoom}x`);
+    }
+}
+
+// Get mouse sensitivity multiplier based on current zoom level
+function getMouseSensitivityMultiplier(): number {
+    if (currentEquippedWeapon === 'sniper' && (isAimingWithMouseActual || isAimingWithKeyActual)) {
+        const zoomLevel = SCOPE_ZOOM_LEVELS[currentScopeZoomIndex];
+        // Reduce sensitivity more for higher zoom levels
+        // 2x: 0.5, 4x: 0.25, 8x: 0.125, 16x: 0.0625
+        return 1 / zoomLevel;
+    }
+    return 1.0; // Normal sensitivity for non-scoped or other weapons
+}
+
 let currentEquippedWeapon: 'handgun' | 'sniper' | 'smg' = 'handgun';
 let lastFireTime = 0;
 let currentAmmo: Record<string, number> = {}; // Current ammo for each weapon
@@ -309,7 +347,7 @@ function getMapScale(): number {
         case MapType.FOREST:
             return 170;
         case MapType.PLAINS:
-            return 900;
+            return 900; // Large plains map
         case MapType.MOUNTAIN:
             return 200;
         default:
@@ -395,6 +433,43 @@ const mapFeatures: THREE.Mesh[] = [];
 const terrainMeshes: THREE.Object3D[] = []; // Store terrain meshes separately from collision objects
 let cachedTerrainMeshes: THREE.Mesh[] = []; // Cache terrain meshes for performance
 const arenaMapFeatureMaterial = new THREE.MeshStandardMaterial({ color: 0x607D8B, roughness: 0.8, metalness: 0.2 });
+
+// Get map bounds based on current map scale
+function getMapBounds() {
+    const scale = getMapScale();
+    const boundRange = scale * 0.85; // Use 85% of map scale for object placement
+    return { minX: -boundRange, maxX: boundRange, minZ: -boundRange, maxZ: boundRange };
+}
+
+// Get object count multiplier based on map scale
+function getObjectCountMultiplier(): number {
+    const scale = getMapScale();
+    const baseScale = 160; // Arena scale as base
+    return Math.max(1, scale / baseScale); // At least 1x, more for larger maps
+}
+
+// Create ground mesh based on current map type
+function createGroundMesh() {
+    // Remove existing ground if it exists
+    if (groundMesh && scene) {
+        scene.remove(groundMesh);
+        if (groundMesh.geometry) groundMesh.geometry.dispose();
+        if (groundMesh.material instanceof THREE.Material) groundMesh.material.dispose();
+    }
+    
+    // Set ground size based on map type
+    const groundSize = currentMapType === MapType.PLAINS ? 2000 : 500; // 2km x 2km for plains, 500x500 for others
+    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
+    const groundMaterial = new THREE.MeshStandardMaterial({ color: ARENA_GROUND_COLOR, roughness: 0.9 }); 
+    groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+    groundMesh.rotation.x = -Math.PI / 2; 
+    groundMesh.receiveShadow = true; 
+    groundMesh.name = "ground";
+    
+    if (scene) {
+        scene.add(groundMesh);
+    }
+}
 const urbanBuildingMaterial = new THREE.MeshStandardMaterial({ color: 0x78909C, roughness: 0.7, metalness: 0.1 }); 
 const urbanObstacleMaterial = new THREE.MeshStandardMaterial({ color: 0x546E7A, roughness: 0.8, metalness: 0.1 }); 
 const forestTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.1 });
@@ -1088,6 +1163,9 @@ function resetGameScene() {
     if (prng) console.log(`PRNG Next (consumed for log): ${prng.next()}`);
 
 
+    // Recreate ground with appropriate size for map type
+    createGroundMesh();
+    
     if (groundMesh && groundMesh.material instanceof THREE.MeshStandardMaterial) {
         let groundColor = ARENA_GROUND_COLOR;
         if (currentMapType === MapType.URBAN) groundColor = URBAN_GROUND_COLOR;
@@ -1109,7 +1187,7 @@ function resetGameScene() {
         } else if (currentMapType === MapType.PLAINS) {
             scene.fog.color.setHex(0x87CEEB); // Light sky blue
             scene.fog.near = 0;
-            scene.fog.far = 800; // Very far for long-range sniping
+            scene.fog.far = 2000; // Extended to 2000m for long-range visibility
         } else if (currentMapType === MapType.MOUNTAIN) {
             scene.fog.color.setHex(0x6B8E60); // Mountain mist color
             scene.fog.near = 0;
@@ -1490,6 +1568,18 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
             zeroingDisplay.style.display = 'none';
         }
     }
+    
+    // Show/hide zoom display and update it based on weapon type
+    const zoomDisplay = document.getElementById('zoom-display');
+    if (zoomDisplay) {
+        if (weaponType === 'sniper') {
+            currentScopeZoomIndex = 0; // Reset to 2x zoom when equipping sniper
+            zoomDisplay.style.display = 'block';
+            updateZoomDisplay();
+        } else {
+            zoomDisplay.style.display = 'none';
+        }
+    }
 }
 
 
@@ -1628,6 +1718,23 @@ function initThreeJSGame() {
 
   controls = new PointerLockControls(camera, renderer.domElement);
   
+  // Store original mouse move function for sensitivity modification
+  const originalOnMouseMove = (controls as any).onMouseMove;
+  (controls as any).onMouseMove = function(event: MouseEvent) {
+    if (this.isLocked === false) return;
+    
+    const sensitivity = getMouseSensitivityMultiplier();
+    
+    // Create modified event with adjusted movement
+    const modifiedEvent = {
+      ...event,
+      movementX: event.movementX * sensitivity,
+      movementY: event.movementY * sensitivity
+    };
+    
+    originalOnMouseMove.call(this, modifiedEvent);
+  };
+  
   // Wait for next frame to ensure PointerLockControls internal structure is ready
   setTimeout(() => {
     pitchObject = camera.parent as THREE.Object3D;
@@ -1731,11 +1838,8 @@ function initThreeJSGame() {
   directionalLight.shadow.camera.top = 60; directionalLight.shadow.camera.bottom = -60;
   scene.add(directionalLight);
 
-  const groundGeometry = new THREE.PlaneGeometry(500, 500);
-  const groundMaterial = new THREE.MeshStandardMaterial({ color: ARENA_GROUND_COLOR, roughness: 0.9 }); 
-  groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-  groundMesh.rotation.x = -Math.PI / 2; groundMesh.receiveShadow = true; groundMesh.name = "ground";
-  scene.add(groundMesh);
+  // Ground will be created in resetGameScene() based on map type
+  createGroundMesh();
   
   document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
   document.addEventListener('mousedown', onMouseDown); document.addEventListener('mouseup', onMouseUp);
@@ -1748,8 +1852,9 @@ function initThreeJSGame() {
 
 function generateArenaMap() {
     if (!prng) { console.error("ArenaMap: PRNG not initialized!"); return; }
-    const featurePlacementBounds = { minX: -80, maxX: 80, minZ: -80, maxZ: 80 };
-    const numObstacles = prng.nextInt(15, 24);
+    const featurePlacementBounds = getMapBounds();
+    const multiplier = getObjectCountMultiplier();
+    const numObstacles = prng.nextInt(Math.floor(15 * multiplier), Math.floor(24 * multiplier));
     for (let i = 0; i < numObstacles; i++) {
         const sizeX = prng.randFloat(2, 10);
         const sizeY = prng.randFloat(1, 6);
@@ -1802,8 +1907,9 @@ function generateArenaMap() {
 
 function generateUrbanMap() {
     if (!prng) { console.error("UrbanMap: PRNG not initialized!"); return; }
-    const cityBounds = { minX: -100, maxX: 100, minZ: -100, maxZ: 100 };
-    const numBuildings = prng.nextInt(20, 35);
+    const cityBounds = getMapBounds();
+    const multiplier = getObjectCountMultiplier();
+    const numBuildings = prng.nextInt(Math.floor(20 * multiplier), Math.floor(35 * multiplier));
     const minBuildingDim = 8, maxBuildingDim = 25;
     const minBuildingHeight = 10, maxBuildingHeight = 40;
 
@@ -1892,8 +1998,9 @@ function generateUrbanMap() {
 
 function generateForestMap() {
     if (!prng) { console.error("ForestMap: PRNG not initialized!"); return; }
-    const forestBounds = { minX: -90, maxX: 90, minZ: -90, maxZ: 90 };
-    const numTrees = prng.nextInt(35, 50); 
+    const forestBounds = getMapBounds();
+    const multiplier = getObjectCountMultiplier();
+    const numTrees = prng.nextInt(Math.floor(35 * multiplier), Math.floor(50 * multiplier)); 
 
     for (let i = 0; i < numTrees; i++) {
         const treeGroup = new THREE.Group();
@@ -1999,11 +2106,11 @@ function generateForestMap() {
 function generatePlainsMap() {
     if (!prng) { console.error("PlainsMap: PRNG not initialized!"); return; }
     
-    // Large 1km x 1km plains (500 units radius = 1km diameter)
-    const plainsBounds = { minX: -500, maxX: 500, minZ: -500, maxZ: 500 };
+    const plainsBounds = getMapBounds();
+    const multiplier = getObjectCountMultiplier();
     
     // Create rolling hills using elevation points
-    const numHills = prng.nextInt(8, 15);
+    const numHills = prng.nextInt(Math.floor(8 * multiplier), Math.floor(15 * multiplier));
     for (let i = 0; i < numHills; i++) {
         const hillRadius = prng.randFloat(15, 40);
         const hillHeight = prng.randFloat(3, 12);
@@ -2023,7 +2130,7 @@ function generatePlainsMap() {
     }
     
     // Sparse rock formations for cover
-    const numRockFormations = prng.nextInt(12, 20);
+    const numRockFormations = prng.nextInt(Math.floor(12 * multiplier), Math.floor(20 * multiplier));
     for (let i = 0; i < numRockFormations; i++) {
         const rockGroup = new THREE.Group();
         rockGroup.name = `plains_rocks_${i}`;
@@ -2427,25 +2534,21 @@ function createTargets() {
   if (currentMapType === MapType.PLAINS) {
     MAX_TARGET_ATTEMPTS = 25; // More attempts needed for sparse large map
   } 
-  let numTargets = 40;
-  let boundsMultiplier = 160; 
+  // Use scale-based target generation
+  const multiplier = getObjectCountMultiplier();
+  const scale = getMapScale();
+  let numTargets = Math.floor(40 * multiplier); // Base 40 targets, scaled by map size
+  let boundsMultiplier = scale; // Use map scale directly
+  
+  // Map-specific Y positioning
   let yBase = 0.75 + (prng.next() * 12); 
-
   if (currentMapType === MapType.URBAN) {
-    numTargets = 50;
-    boundsMultiplier = 190;
     yBase = 0.75 + (prng.next() * 25);
   } else if (currentMapType === MapType.FOREST) {
-    numTargets = 45;
-    boundsMultiplier = 170; 
     yBase = 0.75 + (prng.next() * 8); 
   } else if (currentMapType === MapType.PLAINS) {
-    numTargets = 100; // More targets for the large map
-    boundsMultiplier = 900; // Cover most of the 1km x 1km area
     yBase = 0.75 + (prng.next() * 15); // Slightly higher for visibility
   } else if (currentMapType === MapType.MOUNTAIN) {
-    numTargets = 40; // Fewer targets for the specific terrain layout
-    boundsMultiplier = 200; // Match terrain asset scale
     yBase = 0.75 + (prng.next() * 20); // Appropriate height for terrain
   }
   console.log(`Creating ${numTargets} targets for map type ${currentMapType !== undefined ? MapType[currentMapType] : 'undefined'}`);
@@ -3487,6 +3590,9 @@ function onKeyDown(event: KeyboardEvent) {
     case 'Digit2': queueInput(() => equipWeapon('sniper')); break;
     case 'Digit3': queueInput(() => equipWeapon('smg')); break;
     case 'KeyR': queueInput(() => startReload()); break;
+    case 'KeyB': // B key to cycle scope zoom (sniper only)
+      if (currentEquippedWeapon === 'sniper') queueInput(() => cycleScopeZoom()); 
+      break;
     case 'PageUp': queueInput(() => adjustZeroing(25)); break; // Increase zeroing distance
     case 'PageDown': queueInput(() => adjustZeroing(-25)); break; // Decrease zeroing distance
   }
@@ -3936,7 +4042,17 @@ function updateWeaponDynamics(delta: number) {
   const weaponModel = stats.model!;
   const currentIsAimingDownSights = isAimingWithMouseActual || isAimingWithKeyActual;
 
-  const targetFOV = currentIsAimingDownSights ? stats.adsFov! : NORMAL_FOV;
+  // Use variable zoom for sniper rifle, fixed FOV for others
+  let targetFOV: number;
+  if (currentIsAimingDownSights) {
+    if (currentEquippedWeapon === 'sniper') {
+      targetFOV = getCurrentScopeFOV();
+    } else {
+      targetFOV = stats.adsFov!;
+    }
+  } else {
+    targetFOV = NORMAL_FOV;
+  }
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, ADS_TRANSITION_SPEED * delta);
   camera.updateProjectionMatrix();
 
