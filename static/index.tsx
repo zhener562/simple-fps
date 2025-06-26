@@ -54,6 +54,8 @@ interface Projectile {
   lifeTime: number;
   spawnTime: number;
   weaponType: 'handgun' | 'sniper' | 'smg'; // To know which stats to use
+  distanceTraveled: number; // Distance traveled in meters for ballistic calculations
+  initialPosition: THREE.Vector3; // Starting position for distance calculation
 }
 const projectiles: Projectile[] = [];
 
@@ -165,7 +167,21 @@ const PROJECTILE_RADIUS = 0.08;
 const GRAVITY = 9.8; // Gravity acceleration (m/s²)
 const JUMP_VELOCITY = 7.0; // Initial jump velocity (m/s)
 const MAX_CLIMBABLE_ANGLE = 45; // Maximum climbable slope angle in degrees
-const STEP_UP_HEIGHT = 0.5; // Maximum height player can automatically step up 
+const STEP_UP_HEIGHT = 0.5; // Maximum height player can automatically step up
+
+// Ballistic calculation functions
+function calculateVelocityAtDistance(initialVelocity: number, distance: number, ballisticCoefficient: number, airDensity: number = 1.225): number {
+  const dragConstant = 0.0000001225 * airDensity / ballisticCoefficient;
+  return initialVelocity * Math.exp(-dragConstant * distance);
+}
+
+function calculateVelocityBasedDamage(baseDamage: number, currentVelocity: number, initialVelocity: number): number {
+  // Calculate velocity-based damage multiplier
+  const velocityRatio = currentVelocity / initialVelocity;
+  
+  // Apply velocity-based damage scaling
+  return baseDamage * velocityRatio;
+} 
 
 const projectileGeometry = new THREE.SphereGeometry(PROJECTILE_RADIUS, 8, 8);
 const handgunProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -205,6 +221,8 @@ interface WeaponStats {
     magazineCapacity: number; // Maximum bullets in magazine
     reloadTime: number; // Time in milliseconds to reload
     zeroingDistance?: number; // Zeroing distance in meters (for sniper rifles)
+    ballisticCoefficient?: number; // Ballistic coefficient (G1 standard)
+    airDensity?: number; // Air density (kg/m³, default 1.225)
 }
 
 let weaponStatsDB: Record<string, Partial<WeaponStats>> = {}; // Will be populated after models are created
@@ -1906,6 +1924,8 @@ function populateWeaponStatsDB() {
             damage: 25, // Adjusted for 100 HP system (4 shots to kill)
             magazineCapacity: 15,
             reloadTime: 500,
+            ballisticCoefficient: 0.15, // Pistol bullet BC
+            airDensity: 1.225,
         },
         sniper: {
             hipPosition: new THREE.Vector3(0.3, -0.22, -0.6), 
@@ -1924,7 +1944,9 @@ function populateWeaponStatsDB() {
             damage: 75, // Reduced damage, headshot x2 = 150 for instakill
             magazineCapacity: 5,
             reloadTime: 1500,
-            zeroingDistance: 100, // Default 100m zeroing 
+            zeroingDistance: 100, // Default 100m zeroing
+            ballisticCoefficient: 0.5, // High BC for long-range accuracy
+            airDensity: 1.225, 
         },
         smg: {
             hipPosition: new THREE.Vector3(0.25, -0.18, -0.45),
@@ -1945,6 +1967,8 @@ function populateWeaponStatsDB() {
             adsSpreadMultiplier: 0.45, // 45% of hip fire spread when ADS
             magazineCapacity: 30,
             reloadTime: 1000,
+            ballisticCoefficient: 0.18, // SMG bullet BC
+            airDensity: 1.225,
         }
     };
     
@@ -3602,6 +3626,8 @@ function setupDataChannelEvents() {
                             lifeTime: 0,
                             spawnTime: performance.now(),
                             weaponType: shootData.weaponType,
+                            distanceTraveled: 0,
+                            initialPosition: new THREE.Vector3(shootData.muzzlePosition.x, shootData.muzzlePosition.y, shootData.muzzlePosition.z)
                         };
                         scene.add(projectileMesh);
                         remoteProjectiles.push(remoteProj);
@@ -4471,6 +4497,8 @@ function spawnProjectileInternal(muzzlePos: THREE.Vector3, projDir: THREE.Vector
     lifeTime: 0,
     spawnTime: performance.now(),
     weaponType: weaponType,
+    distanceTraveled: 0,
+    initialPosition: muzzlePos.clone()
   };
   scene.add(projectile.mesh);
   projectiles.push(projectile);
@@ -4486,6 +4514,20 @@ function updateProjectiles(delta: number) {
     const p = projectiles[i];
     
     const oldPosition = p.mesh.position.clone();
+    
+    // Update distance traveled
+    const distanceThisFrame = p.velocity.length() * delta;
+    p.distanceTraveled += distanceThisFrame;
+    
+    // Apply air resistance if weapon has ballistic coefficient
+    const weaponStats = weaponStatsDB[p.weaponType];
+    if (weaponStats && weaponStats.ballisticCoefficient && weaponStats.airDensity) {
+      const currentSpeed = p.velocity.length();
+      const newSpeed = calculateVelocityAtDistance(currentSpeed, distanceThisFrame, weaponStats.ballisticCoefficient, weaponStats.airDensity);
+      if (currentSpeed > 0) {
+        p.velocity.multiplyScalar(newSpeed / currentSpeed);
+      }
+    }
     
     // Apply gravity to velocity (negative Y direction)
     p.velocity.y -= GRAVITY * delta;
@@ -4596,14 +4638,19 @@ function updateProjectiles(delta: number) {
         if (hitSomethingThisFrame) {
             const weaponStats = weaponStatsDB[p.weaponType];
             if (weaponStats && typeof weaponStats.damage === 'number') {
-                // Calculate velocity-based damage multiplier
+                // Calculate distance and velocity-based damage
                 const projectileSpeed = p.velocity.length();
                 const baseSpeed = weaponStats.projectileSpeed || 250; // fallback to handgun speed
-                const velocityMultiplier = Math.max(0.5, Math.min(3.0, projectileSpeed / baseSpeed));
+                const initialSpeed = baseSpeed; // Use base speed as initial speed
                 
-                let finalDamage = weaponStats.damage * velocityMultiplier;
+                // Use velocity-based damage calculation
+                let finalDamage = calculateVelocityBasedDamage(
+                    weaponStats.damage, 
+                    projectileSpeed, 
+                    initialSpeed
+                );
                 if (isHeadshot) {
-                    finalDamage *= 2; // Double damage for headshots
+                    finalDamage *= 5; // Double damage for headshots
                 }
                 sendGameEvent({ 
                     type: 'hit_opponent', 
@@ -4638,7 +4685,7 @@ function updateProjectiles(delta: number) {
             });
             
             // Debug output for testing
-            console.log(`Hit detected: ${isHeadshot ? 'HEADSHOT' : 'BODY SHOT'} - Damage: ${isHeadshot ? (weaponStats?.damage || 1) * 2 : (weaponStats?.damage || 1)}`);
+            
         }
     }
     
@@ -4700,6 +4747,20 @@ function updateRemoteProjectiles(delta: number) {
         const p = remoteProjectiles[i];
         
         const oldPosition = p.mesh.position.clone();
+        
+        // Update distance traveled for remote projectiles
+        const distanceThisFrame = p.velocity.length() * delta;
+        p.distanceTraveled += distanceThisFrame;
+        
+        // Apply air resistance if weapon has ballistic coefficient
+        const weaponStats = weaponStatsDB[p.weaponType];
+        if (weaponStats && weaponStats.ballisticCoefficient && weaponStats.airDensity) {
+          const currentSpeed = p.velocity.length();
+          const newSpeed = calculateVelocityAtDistance(currentSpeed, distanceThisFrame, weaponStats.ballisticCoefficient, weaponStats.airDensity);
+          if (currentSpeed > 0) {
+            p.velocity.multiplyScalar(newSpeed / currentSpeed);
+          }
+        }
         
         // Apply gravity to remote projectiles as well
         p.velocity.y -= GRAVITY * delta;
