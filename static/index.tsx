@@ -96,9 +96,9 @@ let isOnBike = false;
 let bikeModel: THREE.Group | null = null;
 let bikeSpeed = 0;
 // 1000cc Superbike physics parameters (realistic performance)
-let bikeEnginePower = 8000.0; // ~200hp converted to force at wheels (extremely powerful)
+let bikeEnginePower = 4000.0; // ~200hp converted to force at wheels (extremely powerful)
 let bikeAirDragCoefficient = 0.35; // Realistic aerodynamic coefficient for sports bike
-let bikeRollingResistance = 3.0; // Rolling resistance for high-performance tires
+let bikeRollingResistance = 1.5; // Rolling resistance for high-performance tires
 let bikeMass = 180.0; // Lightweight superbike + rider (~200kg total, but more responsive)
 let bikeBrakingForce = 12000.0; // Racing-grade brakes (extremely powerful)
 let bikeTurnSpeed = 4.0;
@@ -1898,14 +1898,14 @@ function populateWeaponStatsDB() {
             recoilAmount: new THREE.Vector3(0.01, 0.025, 0.06), 
             recoilDuration: 0.05,
             recoilReturnSpeed: 18,
-            fireRate: 250, 
+            fireRate: 200, 
             projectileSpeed: 250.0,
             projectileMaterial: handgunProjectileMaterial,
             model: handgunModel,
             muzzlePoint: handgunMuzzlePoint,
             damage: 25, // Adjusted for 100 HP system (4 shots to kill)
             magazineCapacity: 15,
-            reloadTime: 1500,
+            reloadTime: 500,
         },
         sniper: {
             hipPosition: new THREE.Vector3(0.3, -0.22, -0.6), 
@@ -1916,14 +1916,14 @@ function populateWeaponStatsDB() {
             recoilAmount: new THREE.Vector3(0.005, 0.07, 0.15), 
             recoilDuration: 0.15,
             recoilReturnSpeed: 12, 
-            fireRate: 1500, 
+            fireRate: 500, 
             projectileSpeed: 850.0,
             projectileMaterial: sniperProjectileMaterial,
             model: sniperRifleModel,
             muzzlePoint: sniperMuzzlePoint,
             damage: 75, // Reduced damage, headshot x2 = 150 for instakill
             magazineCapacity: 5,
-            reloadTime: 2500,
+            reloadTime: 1500,
             zeroingDistance: 100, // Default 100m zeroing 
         },
         smg: {
@@ -1944,7 +1944,7 @@ function populateWeaponStatsDB() {
             spreadAngle: THREE.MathUtils.degToRad(7.0), // ~7 degree cone for hip fire
             adsSpreadMultiplier: 0.45, // 45% of hip fire spread when ADS
             magazineCapacity: 30,
-            reloadTime: 2000,
+            reloadTime: 1000,
         }
     };
     
