@@ -4596,7 +4596,12 @@ function updateProjectiles(delta: number) {
         if (hitSomethingThisFrame) {
             const weaponStats = weaponStatsDB[p.weaponType];
             if (weaponStats && typeof weaponStats.damage === 'number') {
-                let finalDamage = weaponStats.damage;
+                // Calculate velocity-based damage multiplier
+                const projectileSpeed = p.velocity.length();
+                const baseSpeed = weaponStats.projectileSpeed || 250; // fallback to handgun speed
+                const velocityMultiplier = Math.max(0.5, Math.min(3.0, projectileSpeed / baseSpeed));
+                
+                let finalDamage = weaponStats.damage * velocityMultiplier;
                 if (isHeadshot) {
                     finalDamage *= 2; // Double damage for headshots
                 }
