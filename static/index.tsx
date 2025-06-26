@@ -114,6 +114,201 @@ let bikeMaxHealth = 100.0;
 let bikeLastCollisionTime = 0;
 let bikeCollisionCooldown = 100; // ms between collision checks to prevent spam
 
+// Unified function to create bike explosion effect
+function createBikeExplosion(position?: THREE.Vector3, enableCameraShake: boolean = true): void {
+    if (!scene) return;
+    
+    // Use provided position or default to bike position
+    const explosionPosition = position || bikePosition.clone();
+    
+    // Create explosion particles
+    const particleCount = enableCameraShake ? 50 : 40; // More particles for local explosion
+    const particles: THREE.Mesh[] = [];
+    
+    for (let i = 0; i < particleCount; i++) {
+        const particleGeometry = new THREE.SphereGeometry(0.1 + Math.random() * 0.2, 4, 4);
+        const particleMaterial = new THREE.MeshBasicMaterial({ 
+            color: new THREE.Color().setHSL(Math.random() * 0.1, 1, 0.5 + Math.random() * 0.5) // Orange/red colors
+        });
+        const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+        
+        // Position at explosion location
+        particle.position.copy(explosionPosition);
+        particle.position.y += Math.random() * 2;
+        
+        // Random velocity
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 20,
+            Math.random() * 15 + 5,
+            (Math.random() - 0.5) * 20
+        );
+        (particle as any).velocity = velocity;
+        (particle as any).life = 2.0; // 2 seconds lifetime
+        
+        particles.push(particle);
+        scene.add(particle);
+    }
+    
+    // Animate particles
+    const animateExplosion = () => {
+        const delta = 0.016; // ~60fps
+        
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const particle = particles[i];
+            const velocity = (particle as any).velocity;
+            let life = (particle as any).life;
+            
+            // Update position
+            particle.position.addScaledVector(velocity, delta);
+            
+            // Apply gravity
+            velocity.y -= 9.8 * delta;
+            
+            // Fade out
+            life -= delta;
+            (particle as any).life = life;
+            
+            if (particle.material instanceof THREE.MeshBasicMaterial) {
+                particle.material.opacity = Math.max(0, life / 2.0);
+                particle.material.transparent = true;
+            }
+            
+            // Remove dead particles
+            if (life <= 0) {
+                scene.remove(particle);
+                if (particle.geometry) particle.geometry.dispose();
+                if (particle.material) (particle.material as THREE.Material).dispose();
+                particles.splice(i, 1);
+            }
+        }
+        
+        // Continue animation if particles remain
+        if (particles.length > 0) {
+            requestAnimationFrame(animateExplosion);
+        }
+    };
+    
+    animateExplosion();
+    
+    // Screen shake effect (only for local explosions)
+    if (enableCameraShake && camera) {
+        const originalPosition = camera.position.clone();
+        let shakeTime = 0;
+        const shakeDuration = 1.0;
+        const shakeIntensity = 0.5;
+        
+        const shakeCamera = () => {
+            if (shakeTime < shakeDuration) {
+                shakeTime += 0.016;
+                const intensity = shakeIntensity * (1 - shakeTime / shakeDuration);
+                
+                camera.position.x = originalPosition.x + (Math.random() - 0.5) * intensity;
+                camera.position.y = originalPosition.y + (Math.random() - 0.5) * intensity;
+                camera.position.z = originalPosition.z + (Math.random() - 0.5) * intensity;
+                
+                requestAnimationFrame(shakeCamera);
+            } else {
+                camera.position.copy(originalPosition);
+            }
+        };
+        
+        shakeCamera();
+    }
+    
+    console.log("Bike explosion created at", explosionPosition);
+}
+
+// Function to damage bike
+function damageBike(damage: number): void {
+    bikeHealth = Math.max(0, bikeHealth - damage);
+    console.log(`Bike took ${damage} damage. Health: ${bikeHealth}/${bikeMaxHealth}`);
+    
+    // Visual feedback for bike damage
+    if (bikeModel) {
+        bikeModel.traverse((child: any) => {
+            if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+                const originalColor = child.material.color.getHex();
+                child.material.color.setHex(0xff0000); // Red damage indicator
+                setTimeout(() => {
+                    if (child && child.material instanceof THREE.MeshStandardMaterial) {
+                        child.material.color.setHex(originalColor);
+                    }
+                }, 200);
+            }
+        });
+    }
+    
+    // If bike is destroyed
+    if (bikeHealth <= 0) {
+        console.log("Bike destroyed!");
+        
+        // Create explosion effect
+        createBikeExplosion();
+        
+        // Player dies from bike explosion
+        currentHealth = 0;
+        
+        // Remove bike from scene and cleanup
+        if (bikeModel && bikeModel.parent) {
+            scene.remove(bikeModel);
+            bikeModel.traverse((child: any) => {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach((mat: any) => mat.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            });
+            bikeModel = null;
+        }
+        
+        // Force player off bike and reset position
+        if (isOnBike) {
+            isOnBike = false;
+            // Move player to a safe position near explosion
+            if (camera && camera.position) {
+                camera.position.y = bikePosition.y + PLAYER_HEIGHT;
+            }
+        }
+        
+        // Send bike explosion event to other player for visual sync
+        if (gameMode === 'multiplayer') {
+            sendGameEvent({
+                type: 'bike_exploded',
+                data: {
+                    playerPosition: { x: bikePosition.x, y: bikePosition.y, z: bikePosition.z }
+                } as GameEventBikeExplodedData
+            });
+            
+            sendGameEvent({ type: 'i_was_defeated' });
+        }
+        
+        // Show death message
+        showTemporaryMessage("Bike exploded! You have been killed!", 3000);
+        
+        // Reset bike health for respawn
+        bikeHealth = bikeMaxHealth;
+        
+        // Reset bike position
+        bikePosition.set(0, 0, 0);
+        
+        // Trigger respawn after explosion delay
+        setTimeout(() => {
+            if (currentHealth <= 0) {
+                currentHealth = MAX_HEALTH;
+                
+                // Ensure player respawns at a different location
+                // Use triggerRespawn which handles proper spawn position selection
+                // triggerRespawn will be called below, so we don't need to manually set position here
+                
+                triggerRespawn();
+            }
+        }, 2000);
+    }
+}
+
 // Calculate theoretical maximum speed based on engine power and air resistance
 function calculateTheoreticalMaxSpeed(): number {
     // Solve: enginePower = airDrag + rollingResistance
@@ -171,7 +366,8 @@ const STEP_UP_HEIGHT = 0.5; // Maximum height player can automatically step up
 
 // Ballistic calculation functions
 function calculateVelocityAtDistance(initialVelocity: number, distance: number, ballisticCoefficient: number, airDensity: number = 1.225): number {
-  const dragConstant = 0.0000001225 * airDensity / ballisticCoefficient;
+  // Increased drag constant for more noticeable air resistance effect
+  const dragConstant = 0.000001 * airDensity / ballisticCoefficient;
   return initialVelocity * Math.exp(-dragConstant * distance);
 }
 
@@ -664,8 +860,7 @@ function explodeBike(speedKmh: number): void {
     
     // Handle death and respawn logic
     if (currentHealth <= 0) {
-        // Sync health systems
-        playerHealth = Math.round(currentHealth);
+        // Health at zero, handle death
         
         // Handle multiplayer death event
         if (gameMode === 'multiplayer') {
@@ -678,8 +873,7 @@ function explodeBike(speedKmh: number): void {
         
         // Reset health and trigger respawn
         currentHealth = MAX_HEALTH;
-        playerHealth = PLAYER_MAX_HEALTH;
-        triggerRespawn();
+                triggerRespawn();
     }
     
     // Note: Bike model removal and state reset is handled in triggerRespawn()
@@ -828,9 +1022,7 @@ let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
 
 
-const PLAYER_MAX_HEALTH = 100; // Changed to 100 HP system
 const KILLS_TO_WIN = 3;
-let playerHealth = PLAYER_MAX_HEALTH;
 let myScore = 0;
 let opponentScore = 0;
 let isGameOver = false;
@@ -867,9 +1059,17 @@ interface GameEventMapSeedData {
     mapType: MapType;
 }
 
+interface GameEventBikeHitData {
+    damageDealt: number;
+}
+
+interface GameEventBikeExplodedData {
+    playerPosition: { x: number; y: number; z: number };
+}
+
 interface GameEvent {
-  type: 'shoot' | 'hit_opponent' | 'i_was_defeated' | 'game_over_notif' | 'map_seed';
-  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | any;
+  type: 'shoot' | 'hit_opponent' | 'i_was_defeated' | 'game_over_notif' | 'map_seed' | 'bike_hit' | 'bike_exploded';
+  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | GameEventBikeHitData | GameEventBikeExplodedData | any;
 }
 
 /**
@@ -1457,8 +1657,7 @@ function resetP2PState() {
 }
 
 function resetGameScene() {
-    playerHealth = PLAYER_MAX_HEALTH;
-    currentHealth = MAX_HEALTH; // Also reset new health system
+        currentHealth = MAX_HEALTH; // Also reset new health system
     myScore = 0;
     opponentScore = 0;
     isGameOver = false;
@@ -1941,7 +2140,7 @@ function populateWeaponStatsDB() {
             projectileMaterial: sniperProjectileMaterial,
             model: sniperRifleModel,
             muzzlePoint: sniperMuzzlePoint,
-            damage: 75, // Reduced damage, headshot x2 = 150 for instakill
+            damage: 105, 
             magazineCapacity: 5,
             reloadTime: 1500,
             zeroingDistance: 100, // Default 100m zeroing
@@ -3662,8 +3861,7 @@ function setupDataChannelEvents() {
                     showTemporaryMessage(hitMessage, 2000);
 
                     // Update playerHealth to sync with new system
-                    playerHealth = Math.round(currentHealth);
-
+                    
                     if (currentHealth <= 0) {
                         opponentScore++;
                         sendGameEvent({ type: 'i_was_defeated' });
@@ -3672,8 +3870,7 @@ function setupDataChannelEvents() {
                         } else {
                             // Reset both health systems
                             currentHealth = MAX_HEALTH;
-                            playerHealth = PLAYER_MAX_HEALTH;
-                            triggerRespawn();
+                                                        triggerRespawn();
                         }
                     }
                 } else if (gameEvent.type === 'i_was_defeated') {
@@ -3689,6 +3886,27 @@ function setupDataChannelEvents() {
                         const thisPlayerWon = (isPlayerOne === gameOverData.winnerIsPlayerOne);
                         handleGameOver(thisPlayerWon);
                     }
+                } else if (gameEvent.type === 'bike_hit') {
+                    const bikeHitData = gameEvent.data as GameEventBikeHitData;
+                    
+                    // Apply bike damage
+                    damageBike(bikeHitData.damageDealt);
+                    
+                    // Show bike damage message
+                    showTemporaryMessage(`Bike Hit! -${bikeHitData.damageDealt} HP | Bike Health: ${Math.round(bikeHealth)}`, 2000);
+                } else if (gameEvent.type === 'bike_exploded') {
+                    const explodedData = gameEvent.data as GameEventBikeExplodedData;
+                    
+                    // Create explosion effect at remote player's bike position
+                    if (remotePlayerBikeModel && remotePlayerBikeModel.parent) {
+                        createBikeExplosion(new THREE.Vector3(
+                            explodedData.playerPosition.x,
+                            explodedData.playerPosition.y,
+                            explodedData.playerPosition.z
+                        ), false); // No camera shake for remote explosions
+                    }
+                    
+                    console.log("Remote player's bike exploded!");
                 }
             }
         } catch (error) { console.error("Failed to parse message or update remote player:", error); }
@@ -4230,8 +4448,7 @@ function updateHealthRegeneration(deltaTime: number): void {
             handleGameOver(false); 
           } else {
             currentHealth = MAX_HEALTH;
-            playerHealth = PLAYER_MAX_HEALTH;
-            triggerRespawn();
+                        triggerRespawn();
           }
         } else {
           triggerGameOver();
@@ -4649,6 +4866,9 @@ function updateProjectiles(delta: number) {
                     projectileSpeed, 
                     initialSpeed
                 );
+                
+                // Debug info for velocity-based damage
+                console.log(`Distance: ${p.distanceTraveled.toFixed(1)}m, Speed: ${projectileSpeed.toFixed(1)}/${initialSpeed}, Damage: ${finalDamage.toFixed(1)}`);
                 if (isHeadshot) {
                     finalDamage *= 5; // Double damage for headshots
                 }
@@ -4659,15 +4879,7 @@ function updateProjectiles(delta: number) {
                         isHeadshot: isHeadshot
                     } as GameEventHitOpponentData 
                 });
-            } else {
-                sendGameEvent({ 
-                    type: 'hit_opponent', 
-                    data: { 
-                        damageDealt: isHeadshot ? 2 : 1,
-                        isHeadshot: isHeadshot
-                    } as GameEventHitOpponentData 
-                }); 
-            }
+            } 
             hitSomething = true;
             
             // Visual feedback - different colors for headshots
@@ -4686,6 +4898,56 @@ function updateProjectiles(delta: number) {
             
             // Debug output for testing
             
+        }
+    }
+    
+    // Check collision with bike if target is on bike
+    if (!hitSomething && gameMode === 'multiplayer' && remotePlayerBikeModel && remotePlayerBikeModel.parent) {
+        const bikeBoundingBox = new THREE.Box3().setFromObject(remotePlayerBikeModel);
+        const expandedBikeBox = bikeBoundingBox.clone().expandByScalar(0.5); // Expand for easier targeting
+        
+        let bikeTakeDamage = false;
+        if (projectileSegmentLength >= 0.0001) {
+            const hitBikePoint = _projectileCollisionRay.intersectBox(expandedBikeBox, _projectileIntersectionPoint);
+            if (hitBikePoint && oldPosition.distanceTo(hitBikePoint) <= projectileSegmentLength) {
+                bikeTakeDamage = true;
+            }
+        }
+        
+        if (bikeTakeDamage || expandedBikeBox.containsPoint(p.mesh.position)) {
+            const weaponStats = weaponStatsDB[p.weaponType];
+            if (weaponStats && typeof weaponStats.damage === 'number') {
+                // Calculate bike damage (similar to player damage calculation)
+                let bikeDamage = calculateVelocityBasedDamage(
+                    weaponStats.damage, 
+                    p.velocity.length(), 
+                    weaponStats.projectileSpeed || 250
+                );
+                
+                console.log(`Hit remote bike for ${bikeDamage} damage`);
+                
+                // Send bike hit event to remote player
+                sendGameEvent({
+                    type: 'bike_hit',
+                    data: {
+                        damageDealt: bikeDamage
+                    } as GameEventBikeHitData
+                });
+                
+                // Visual feedback for bike hit
+                remotePlayerBikeModel.traverse((child: any) => {
+                    if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+                        const originalColor = child.material.color.getHex();
+                        child.material.color.setHex(0xff8800); // Orange for bike damage
+                        setTimeout(() => {
+                            if (child && child.material instanceof THREE.MeshStandardMaterial) {
+                                child.material.color.setHex(originalColor);
+                            }
+                        }, 200);
+                    }
+                });
+            }
+            hitSomething = true;
         }
     }
     
