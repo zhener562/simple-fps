@@ -19,6 +19,7 @@ body, html {
   justify-content: center;
   text-align: center;
   padding: 30px;
+  margin: 30px;
   background-color: rgba(0, 0, 0, 0.8);
   border-radius: 10px;
   box-shadow: 0 0 15px rgba(0,0,0,0.5);
@@ -121,6 +122,61 @@ body, html {
   margin-bottom: 10px;
   width: 100%;
   text-align: center;
+}
+
+/* Instructions Modal Styles */
+#instructions-modal {
+  display: none; /* Hidden by default */
+  position: fixed; /* Stay in place */
+  z-index: 100; /* Sit on top */
+  left: 0;
+  top: 0;
+  width: 100%; /* Full width */
+  height: 100%; /* Full height */
+  overflow: auto; /* Enable scroll if needed */
+  background-color: rgba(0,0,0,0.8); /* Black w/ opacity */
+  flex-direction: column; /* For centering content */
+  justify-content: center;
+  align-items: center;
+}
+
+.modal-content {
+  background-color: #222;
+  margin: auto; /* Center the modal */
+  padding: 30px;
+  border: 1px solid #888;
+  width: 80%; /* Could be more specific */
+  max-width: 600px;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+  text-align: center;
+}
+
+.modal-content h2 {
+  color: #4CAF50;
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.modal-content p {
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+#close-instructions-btn {
+  background-color: #555;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  font-size: 1em;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background-color 0.3s ease;
+  margin-top: 20px;
+}
+
+#close-instructions-btn:hover {
+  background-color: #666;
 }
 
 #map-selection-container h3 {

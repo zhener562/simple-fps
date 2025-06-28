@@ -30,7 +30,13 @@
     </div>
     <!-- End of New Map Selection Section -->
 
-    <div class="instructions-preview">
+    <button id="settings-btn" style="margin-top: 20px;">Settings</button>
+    <button id="instructions-btn" style="margin-top: 10px;">Instructions</button>
+  </div>
+
+  <div id="instructions-modal" style="display: none;">
+    <div class="modal-content">
+      <h2>Game Instructions</h2>
       <p>W, A, S, D to move</p>
       <p>Mouse to look</p>
       <p>Space to Jump</p>
@@ -40,8 +46,14 @@
       <p>R to Reload</p>
       <p>B to Cycle Scope Zoom (Sniper: 2x/4x/8x/16x)</p>
       <p>Page Up/Down for Sniper Zeroing</p>
+
+      <h3>Bike Mode Controls:</h3>
+      <p>V to Mount/Dismount Bike</p>
+      <p>W to Accelerate | S to Decelerate/Brake</p>
+      <p>A to Turn Left | D to Turn Right</p>
+      <p>Left Click to shoot (Handgun/SMG only)</p>
+      <button id="close-instructions-btn">Close</button>
     </div>
-    <button id="settings-btn" style="margin-top: 20px;">Settings</button>
   </div>
 
   <div id="settings-panel" style="display: none;">

@@ -1563,7 +1563,12 @@ function initializeApp() {
   const sensitivitySlider = document.getElementById('mouse-sensitivity-slider') as HTMLInputElement;
   const sensitivityValueSpan = document.getElementById('sensitivity-value') as HTMLSpanElement;
 
-  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapMountainButton || !mapRandomButton || !settingsBtn || !settingsPanel || !backToMenuBtn || !sensitivitySlider || !sensitivityValueSpan) {
+  // Instructions Modal Elements
+  const instructionsBtn = document.getElementById('instructions-btn') as HTMLButtonElement;
+  const instructionsModal = document.getElementById('instructions-modal') as HTMLDivElement;
+  const closeInstructionsBtn = document.getElementById('close-instructions-btn') as HTMLButtonElement;
+
+  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapMountainButton || !mapRandomButton || !settingsBtn || !settingsPanel || !backToMenuBtn || !sensitivitySlider || !sensitivityValueSpan || !instructionsBtn || !instructionsModal || !closeInstructionsBtn) {
       console.error("UI elements not found!");
       return;
   } else {
@@ -1622,6 +1627,17 @@ function initializeApp() {
     }
     // Save to localStorage
     localStorage.setItem('mouseSensitivity', value.toString());
+  });
+
+  // Instructions Modal Logic
+  instructionsBtn.addEventListener('click', () => {
+    mainMenuDiv.style.display = 'none';
+    instructionsModal.style.display = 'flex';
+  });
+
+  closeInstructionsBtn.addEventListener('click', () => {
+    instructionsModal.style.display = 'none';
+    mainMenuDiv.style.display = 'flex';
   });
 
   // Load sensitivity from localStorage on startup
