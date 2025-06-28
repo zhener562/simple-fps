@@ -295,14 +295,11 @@ function damageBike(damage: number): void {
                 } as GameEventBikeExplodedData
             });
             
-            sendGameEventToOtherPlayers({ 
-                type: 'i_was_defeated',
-                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
-            });
+            
         }
         
         // Show death message
-        showTemporaryMessage("Bike exploded! You have been killed!", 3000);
+        showTemporaryMessage("Bike exploded! You have been killed!", 500);
         
         // Reset bike health for respawn
         bikeHealth = bikeMaxHealth;
@@ -1201,6 +1198,7 @@ function checkVictoryCondition(): boolean {
     if (connectedIds.length === 0) return false; // No opponents
     
     for (const playerId of connectedIds) {
+        console.log(`Checking deaths for player ${playerId}: ${getPlayerDeaths(playerId)}`);
         if (getPlayerDeaths(playerId) < DEATHS_TO_LOSE) {
             return false; // This player hasn't lost yet
         }
@@ -1385,7 +1383,7 @@ function selectRandomSpawnPoint(
 }
 
 
-function showTemporaryMessage(message: string, duration: number = 2000) {
+function showTemporaryMessage(message: string, duration: number = 500) {
     if (isGameOver || !instructionOverlay || !instructionText) return;
 
     const originalInstructionText = instructionText.textContent;
@@ -2107,10 +2105,11 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
         const hitMessage = hitData.isHeadshot 
             ? `HEADSHOT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`
             : `HIT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`;
-        showTemporaryMessage(hitMessage, 2000);
+        showTemporaryMessage(hitMessage, 500);
 
         if (currentHealth <= 0) {
             myDeaths++;
+            console.log(`myDeaths incremented to: ${myDeaths}`);
             // Send defeat notification to other players with my player ID
             sendGameEventToOtherPlayers({ 
                 type: 'i_was_defeated',
@@ -2141,25 +2140,23 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
                 return;
             }
         }
-        showTemporaryMessage("Enemy player defeated!", 2000);
+        showTemporaryMessage("Enemy player defeated!", 500);
     }
     else if (gameEvent.type === 'game_over_notif') {
-        if(isGameOver) return;
-        const gameOverData = gameEvent.data as GameEventGameOverData;
-        handleGameOver(gameOverData.winnerIsPlayerOne !== null ? gameOverData.winnerIsPlayerOne : false);
+        
     }
     else if (gameEvent.type === 'bike_hit') {
         const bikeHitData = gameEvent.data as GameEventBikeHitData;
         takeDamage(bikeHitData.damageDealt);
-        showTemporaryMessage(`Bike collision! -${bikeHitData.damageDealt} HP`, 2000);
+        showTemporaryMessage(`Bike collision! -${bikeHitData.damageDealt} HP`, 500);
     }
     else if (gameEvent.type === 'bike_exploded') {
         const bikeExplosionData = gameEvent.data as GameEventBikeExplodedData;
-        showTemporaryMessage("Enemy bike exploded!", 2000);
+        showTemporaryMessage("Enemy bike exploded!", 500);
     }
     else if (gameEvent.type === 'start_game_request') {
         const requestData = gameEvent.data as GameEventStartGameRequestData;
-        showTemporaryMessage(`${requestData.requesterId} wants to start the game`, 3000);
+        showTemporaryMessage(`${requestData.requesterId} wants to start the game`, 500);
         
         // Auto-accept game start requests in multiplayer
         if (gameMode === 'multiplayer') {
@@ -2378,7 +2375,7 @@ function initializeApp() {
       startGameFromRequest();
       resetGameScene();
       
-      showTemporaryMessage(`Game starting! Sent request to ${connectedCount} player(s).`, 2000);
+      showTemporaryMessage(`Game starting! Sent request to ${connectedCount} player(s).`, 500);
     } else {
       alert("No connected players to start the game with!");
     }
@@ -3132,7 +3129,7 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     
     // Bike weapon restriction: only allow weapons in bikeCanUseWeapons array while on bike
     if (isOnBike && !bikeCanUseWeapons.includes(weaponType)) {
-        showTemporaryMessage(`Cannot use ${weaponType} while on bike! Only ${bikeCanUseWeapons.join(', ')} allowed.`, 2000);
+        showTemporaryMessage(`Cannot use ${weaponType} while on bike! Only ${bikeCanUseWeapons.join(', ')} allowed.`, 500);
         return;
     }
     
@@ -3336,7 +3333,7 @@ function toggleBike() {
             equipWeapon('handgun');
         }
         
-        showTemporaryMessage("Bike ON - W/S: Accelerate/Brake, A/D: Turn", 3000);
+        showTemporaryMessage("Bike ON - W/S: Accelerate/Brake, A/D: Turn", 500);
     } else {
         // Hide bike model
         if (bikeModel) {
@@ -3362,7 +3359,7 @@ function toggleBike() {
             cameraObject.rotation.z = 0; // Remove banking
         }
         
-        showTemporaryMessage("Bike OFF", 2000);
+        showTemporaryMessage("Bike OFF", 500);
     }
 }
 
@@ -4791,7 +4788,7 @@ function setupDataChannelEvents() {
                     const hitMessage = hitData.isHeadshot 
                         ? `HEADSHOT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`
                         : `HIT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`;
-                    showTemporaryMessage(hitMessage, 2000);
+                    showTemporaryMessage(hitMessage, 500);
 
                     // Update playerHealth to sync with new system
                     
@@ -4812,25 +4809,10 @@ function setupDataChannelEvents() {
                         }
                     }
                 } else if (gameEvent.type === 'i_was_defeated') {
-                    if(isGameOver) return;
+                    
                     // Handle opponent death in multiplayer
-                    const primaryOpponent = getPrimaryOpponentId();
-                    if (primaryOpponent) {
-                        const opponentDeaths = incrementPlayerDeaths(primaryOpponent);
-                        
-                        showTemporaryMessage(`Opponent Defeated! (${opponentDeaths}/${DEATHS_TO_LOSE} deaths)`, 2000);
-                        
-                        if (checkVictoryCondition()) {
-                            handleGameOver(true); 
-                        }
-                    } else {
-                        // Legacy single opponent mode
-                        myScore++;
-                        showTemporaryMessage(`Opponent Defeated! Your Score: ${myScore}`, 2000);
-                        if (myScore >= DEATHS_TO_LOSE) {
-                            handleGameOver(true); 
-                        }
-                    }
+                    
+                    
                 } else if (gameEvent.type === 'game_over_notif') {
                     const gameOverData = gameEvent.data as GameEventGameOverData;
                     if (gameOverData.winnerIsPlayerOne !== null && !isGameOver) { 
@@ -4844,13 +4826,13 @@ function setupDataChannelEvents() {
                     damageBike(bikeHitData.damageDealt);
                     
                     // Show bike damage message
-                    showTemporaryMessage(`Bike Hit! -${bikeHitData.damageDealt} HP | Bike Health: ${Math.round(bikeHealth)}`, 2000);
+                    showTemporaryMessage(`Bike Hit! -${bikeHitData.damageDealt} HP | Bike Health: ${Math.round(bikeHealth)}`, 500);
                 } else if (gameEvent.type === 'start_game_request') {
                     const requestData = gameEvent.data as GameEventStartGameRequestData;
                     console.log(`Received game start request from player: ${requestData.requesterId}`);
                     
                     // Show notification and auto-start the game
-                    showTemporaryMessage(`Game starting! Request from ${requestData.requesterId}`, 2000);
+                    showTemporaryMessage(`Game starting! Request from ${requestData.requesterId}`, 500);
                     startGameFromRequest();
                 } else if (gameEvent.type === 'bike_exploded') {
                     const explodedData = gameEvent.data as GameEventBikeExplodedData;
@@ -5208,7 +5190,7 @@ function triggerRespawn() {
     }
     
     velocity.set(0,0,0);
-    showTemporaryMessage("RESPAWNED!", 1500);
+    showTemporaryMessage("RESPAWNED!", 500);
 }
 
 function handleGameOver(playerWon: boolean) {
