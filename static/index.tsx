@@ -1900,6 +1900,13 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
     if (!meshes) return;
     
     if (state.isOnBike) {
+        console.log(`🏍️ [${playerId}] Player on bike:`, {
+            bikePosition: state.bikePosition,
+            playerPosition: state.position,
+            bikeDirection: state.bikeDirection,
+            bikeBankAngle: state.bikeBankAngle
+        });
+        
         // Create bike model if it doesn't exist
         if (!meshes.bikeModel) {
             meshes.bikeModel = createBikeModel();
@@ -1921,8 +1928,11 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
             }
         }
         
+        // Position bike
         meshes.bikeModel.position.set(bikePos.x, bikeY, bikePos.z);
+        console.log(`🏍️ [${playerId}] Bike positioned at:`, meshes.bikeModel.position);
         
+        // Set bike rotation
         if (typeof state.bikeDirection === 'number') {
             meshes.bikeModel.rotation.y = state.bikeDirection;
         }
@@ -1931,14 +1941,43 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
             meshes.bikeModel.rotation.z = state.bikeBankAngle;
         }
         
+        // Position player on bike (similar to bike position but slightly elevated)
+        const playerOnBikePos = {
+            x: bikePos.x,
+            y: bikeY + 1.5, // Elevate player above bike
+            z: bikePos.z
+        };
+        meshes.mainMesh.position.set(playerOnBikePos.x, playerOnBikePos.y, playerOnBikePos.z);
+        
+        // Apply same rotation as bike for player (ensure perfect alignment)
+        if (typeof state.bikeDirection === 'number') {
+            // Match bike direction exactly - no offset needed for remote players
+            meshes.mainMesh.rotation.y = state.bikeDirection;
+        }
+        if (typeof state.bikeBankAngle === 'number') {
+            // Match bike banking exactly for realistic riding position
+            meshes.mainMesh.rotation.z = state.bikeBankAngle;
+        }
+        
+        // Ensure player is upright relative to bike
+        meshes.mainMesh.rotation.x = 0; // Keep player torso upright
+        
+        console.log(`🔄 [${playerId}] Rotations - Bike Y: ${meshes.bikeModel.rotation.y}, Player Y: ${meshes.mainMesh.rotation.y}`);
+        
+        console.log(`👤 [${playerId}] Player positioned at:`, meshes.mainMesh.position);
+        
+        // Show both bike and player
         meshes.bikeModel.visible = true;
-        meshes.mainMesh.visible = false; // Hide player model when on bike
+        meshes.mainMesh.visible = true; // Keep player visible on bike
+        
+        console.log(`✅ [${playerId}] Bike and player both visible`);
     } else {
         // Hide bike when not in use
         if (meshes.bikeModel) {
             meshes.bikeModel.visible = false;
         }
         meshes.mainMesh.visible = true; // Show player model
+        console.log(`🚶 [${playerId}] Player walking, bike hidden`);
     }
 }
 
@@ -2077,13 +2116,16 @@ function handleDataChannelMessage(message: any, senderId: string) {
         const meshes = remotePlayerMeshes.get(senderId)!;
         
         // Adjust remote player position for terrain height
-        let adjustedY = state.position.y - PLAYER_HEIGHT;
+        let adjustedY = state.position.y;
         if (currentMapType === MapType.MOUNTAIN) {
             const terrainHeight = getTerrainHeightAt(state.position.x, state.position.z);
-            adjustedY = Math.max(adjustedY, terrainHeight);
+            // Ensure player is at least at terrain height
+            adjustedY = Math.max(adjustedY, terrainHeight + PLAYER_HEIGHT);
         }
 
-        meshes.mainMesh.position.set(state.position.x, adjustedY + PLAYER_HEIGHT, state.position.z);
+        console.log(`🔧 [${senderId}] Height adjustment - Original: ${state.position.y}, Adjusted: ${adjustedY}, Terrain: ${currentMapType === MapType.MOUNTAIN ? getTerrainHeightAt(state.position.x, state.position.z) : 'N/A'}`);
+        
+        meshes.mainMesh.position.set(state.position.x, adjustedY, state.position.z);
         meshes.mainMesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
         
         updateRemotePlayerWeaponForPlayer(senderId, state.aiming, state.weaponType);
