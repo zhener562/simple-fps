@@ -534,6 +534,9 @@ const startSinglePlayerButton = document.getElementById('start-singleplayer') as
 const startMultiplayerButton = document.getElementById('start-multiplayer') as HTMLButtonElement;
 const instructionText = document.getElementById('instruction-text') as HTMLDivElement;
 const p2pInstructionText = document.getElementById('p2p-instruction') as HTMLParagraphElement;
+const playerCountDisplay = document.getElementById('player-count-display') as HTMLDivElement;
+const playerCountSpan = document.getElementById('player-count') as HTMLSpanElement;
+const startGameRequestBtn = document.getElementById('start-game-request-btn') as HTMLButtonElement;
 const scopeOverlay = document.getElementById('scope-overlay') as HTMLDivElement;
 const speedIndicator = document.getElementById('speed-indicator') as HTMLDivElement;
 
@@ -554,7 +557,12 @@ const copyLocalSdpBtn = document.getElementById('copy-local-sdp-btn') as HTMLBut
 const copyLocalIceBtn = document.getElementById('copy-local-ice-btn') as HTMLButtonElement;
 
 
-// WebRTC Variables
+// WebRTC Variables - Updated for multiplayer support
+const peerConnections = new Map<string, RTCPeerConnection>();
+const dataChannels = new Map<string, RTCDataChannel>();
+let localPlayerId: string | null = null;
+
+// Legacy variables for backward compatibility during transition
 let peerConnection: RTCPeerConnection | null = null;
 let dataChannel: RTCDataChannel | null = null;
 
@@ -646,6 +654,94 @@ const REMOTE_SMG_ADS_OFFSET = new THREE.Vector3(
 let lastSentStateTime = 0;
 const STATE_SEND_INTERVAL = INPUT_DELAY_MS;
 let isPlayerOne: boolean | null = null;
+
+// Player management for multiplayer
+const connectedPlayers = new Map<string, { playerId: string; isConnected: boolean }>();
+
+// Helper functions for multiplayer player management
+function getConnectedPlayerIds(): string[] {
+    return Array.from(connectedPlayers.keys()).filter(id => connectedPlayers.get(id)?.isConnected);
+}
+
+function getDataChannelForPlayer(playerId: string): RTCDataChannel | null {
+    return dataChannels.get(playerId) || null;
+}
+
+// Backward compatibility: get primary opponent for 2-player mode
+function getPrimaryOpponentId(): string | null {
+    const connectedIds = getConnectedPlayerIds();
+    return connectedIds.length > 0 ? connectedIds[0] : null;
+}
+
+// Backward compatibility: maintain legacy variables
+function updateLegacyVariables() {
+    const primaryOpponent = getPrimaryOpponentId();
+    
+    // Only update if we have a primary opponent, otherwise preserve existing connections
+    if (primaryOpponent) {
+        peerConnection = peerConnections.get(primaryOpponent) || peerConnection;
+        dataChannel = dataChannels.get(primaryOpponent) || dataChannel;
+    }
+    // Don't set to null if no primary opponent - this preserves active connections during setup
+}
+
+// Start game from a multiplayer request
+function startGameFromRequest() {
+    if (gameMode !== 'multiplayer') return;
+    
+    // Hide multiplayer UI elements
+    if (signalingPanel) signalingPanel.style.display = 'none';
+    if (playerCountDisplay) playerCountDisplay.style.display = 'none';
+    if (startGameRequestBtn) startGameRequestBtn.style.display = 'none';
+    
+    // Start the actual game
+    if (!mainMenuDiv || !instructionOverlay || !gameContainer || !instructionText) return;
+    mainMenuDiv.style.display = 'none';
+    gameContainer.style.display = 'block';
+    isGameOver = false;
+
+    instructionText.textContent = "Multiplayer Game Starting...";
+    if (p2pInstructionText) p2pInstructionText.style.display = 'none';
+    instructionOverlay.style.display = 'flex';
+
+    if (!isGameInitialized) {
+        initThreeJSGame();
+    }
+    
+    // For multiplayer, map seed and type will be set via P2P
+    // Note: We don't call resetGameScene here, as that will be triggered by map seed exchange
+}
+
+// Update UI to show connected player count
+function updatePlayerCountDisplay() {
+    const connectedCount = getConnectedPlayerIds().length;
+    if (playerCountSpan) {
+        playerCountSpan.textContent = connectedCount.toString();
+    }
+    
+    // Show/hide the display based on multiplayer mode and connections
+    if (playerCountDisplay && gameMode === 'multiplayer') {
+        playerCountDisplay.style.display = connectedCount > 0 ? 'block' : 'none';
+        
+        // Show start game button if there are connected players
+        if (startGameRequestBtn) {
+            startGameRequestBtn.style.display = connectedCount > 0 ? 'block' : 'none';
+        }
+        
+        // Update instruction text
+        if (p2pInstructionText) {
+            if (connectedCount > 0) {
+                p2pInstructionText.textContent = `${connectedCount} player(s) connected. Click "Start Game" to begin!`;
+            } else {
+                p2pInstructionText.textContent = "Use P2P controls below to connect, then click to start.";
+            }
+        }
+    } else {
+        // Hide multiplayer UI in single player mode
+        if (playerCountDisplay) playerCountDisplay.style.display = 'none';
+        if (startGameRequestBtn) startGameRequestBtn.style.display = 'none';
+    }
+}
 
 // Get map scale based on map type
 function getMapScale(): number {
@@ -864,8 +960,11 @@ function explodeBike(speedKmh: number): void {
         
         // Handle multiplayer death event
         if (gameMode === 'multiplayer') {
+            myDeaths++;
             sendGameEvent({ type: 'i_was_defeated' });
-            if (opponentScore >= KILLS_TO_WIN) {
+            updateLegacyScores();
+            
+            if (checkDefeatCondition()) {
                 handleGameOver(false);
                 return;
             }
@@ -1022,10 +1121,52 @@ let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
 
 
-const KILLS_TO_WIN = 3;
+const DEATHS_TO_LOSE = 3; // Changed from KILLS_TO_WIN
 let myScore = 0;
 let opponentScore = 0;
 let isGameOver = false;
+
+// New multiplayer death tracking system
+const playerDeaths = new Map<string, number>(); // Track deaths per player
+let myDeaths = 0; // Track local player deaths
+
+// Helper functions for new victory system
+function getPlayerDeaths(playerId: string): number {
+    return playerDeaths.get(playerId) || 0;
+}
+
+function incrementPlayerDeaths(playerId: string): number {
+    const currentDeaths = getPlayerDeaths(playerId) + 1;
+    playerDeaths.set(playerId, currentDeaths);
+    return currentDeaths;
+}
+
+function checkVictoryCondition(): boolean {
+    // Victory condition: all OTHER players have 3 deaths
+    const connectedIds = getConnectedPlayerIds();
+    if (connectedIds.length === 0) return false; // No opponents
+    
+    for (const playerId of connectedIds) {
+        if (getPlayerDeaths(playerId) < DEATHS_TO_LOSE) {
+            return false; // This player hasn't lost yet
+        }
+    }
+    return true; // All opponents have 3 deaths
+}
+
+function checkDefeatCondition(): boolean {
+    // Defeat condition: local player has 3 deaths
+    return myDeaths >= DEATHS_TO_LOSE;
+}
+
+// Legacy compatibility functions
+function updateLegacyScores() {
+    const primaryOpponent = getPrimaryOpponentId();
+    if (primaryOpponent) {
+        opponentScore = getPlayerDeaths(primaryOpponent);
+        myScore = myDeaths; // In legacy mode, "my score" is actually opponent deaths
+    }
+}
 
 
 interface PlayerState {
@@ -1067,9 +1208,13 @@ interface GameEventBikeExplodedData {
     playerPosition: { x: number; y: number; z: number };
 }
 
+interface GameEventStartGameRequestData {
+    requesterId: string;
+}
+
 interface GameEvent {
-  type: 'shoot' | 'hit_opponent' | 'i_was_defeated' | 'game_over_notif' | 'map_seed' | 'bike_hit' | 'bike_exploded';
-  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | GameEventBikeHitData | GameEventBikeExplodedData | any;
+  type: 'shoot' | 'hit_opponent' | 'i_was_defeated' | 'game_over_notif' | 'map_seed' | 'bike_hit' | 'bike_exploded' | 'start_game_request';
+  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | GameEventBikeHitData | GameEventBikeExplodedData | GameEventStartGameRequestData | any;
 }
 
 /**
@@ -1350,6 +1495,7 @@ async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOp
         }
         
         await initPeerConnection();
+        console.log('After initPeerConnection, peerConnection:', peerConnection);
         
         if (shouldCreateOffer) {
             isPlayerOne = true;
@@ -1371,6 +1517,7 @@ async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOp
 }
 
 async function createAutomaticOffer() {
+    console.log('createAutomaticOffer called, peerConnection:', peerConnection);
     if (!peerConnection) {
         console.error('Peer connection not initialized');
         return;
@@ -1380,6 +1527,12 @@ async function createAutomaticOffer() {
         // Create data channel for game communication
         console.log("Creating data channel 'gameData'.");
         dataChannel = peerConnection.createDataChannel("gameData");
+        
+        // Add to multiplayer system
+        const primaryOpponentId = 'opponent';
+        dataChannels.set(primaryOpponentId, dataChannel);
+        // Note: Don't call updateLegacyVariables() here as it might reset peerConnection
+        
         setupDataChannelEvents();
         
         const offer = await peerConnection.createOffer();
@@ -1509,6 +1662,26 @@ function initializeApp() {
   createAnswerBtn.addEventListener('click', createAnswer);
   setRemoteSdpBtn.addEventListener('click', setRemoteDescription);
   addRemoteIceBtn.addEventListener('click', addRemoteIceCandidate);
+  
+  // Game start request button event listener
+  startGameRequestBtn.addEventListener('click', () => {
+    const connectedCount = getConnectedPlayerIds().length;
+    if (connectedCount > 0 && gameMode === 'multiplayer') {
+      // Send start game request to all connected players
+      const startGameEvent: GameEvent = {
+        type: 'start_game_request',
+        data: { requesterId: clientId || 'unknown' } as GameEventStartGameRequestData
+      };
+      sendGameEventToAllPlayers(startGameEvent);
+      
+      // Start the game locally
+      startGameFromRequest();
+      
+      showTemporaryMessage(`Game starting! Sent request to ${connectedCount} player(s).`, 2000);
+    } else {
+      alert("No connected players to start the game with!");
+    }
+  });
   closeSignalingBtn.addEventListener('click', () => {
     if (dataChannel && dataChannel.readyState === 'open') {
       signalingPanel.style.display = 'none';
@@ -1670,6 +1843,8 @@ function startGame() {
     if (signalingPanel && (!dataChannel || dataChannel.readyState !== 'open')) {
         signalingPanel.style.display = 'block';
     }
+    // Update player count display for multiplayer mode
+    updatePlayerCountDisplay();
     // For multiplayer, map seed and type are set via P2P. PRNG is initialized then.
   }
   instructionOverlay.style.display = 'flex';
@@ -1715,10 +1890,14 @@ function resetP2PState() {
 }
 
 function resetGameScene() {
-        currentHealth = MAX_HEALTH; // Also reset new health system
+    currentHealth = MAX_HEALTH; // Also reset new health system
     myScore = 0;
     opponentScore = 0;
     isGameOver = false;
+    
+    // Reset new multiplayer death tracking system
+    myDeaths = 0;
+    playerDeaths.clear();
     lastFireTime = 0;
     isFiringSMGActual = false;
 
@@ -3624,6 +3803,10 @@ async function initPeerConnection() {
     peerConnection = new RTCPeerConnection(rtcConfig);
     console.log("PeerConnection created with configuration:", rtcConfig);
     
+    // Add to multiplayer system immediately
+    const primaryOpponentId = 'opponent';
+    peerConnections.set(primaryOpponentId, peerConnection);
+    
     if (p2pStatusText) p2pStatusText.textContent = 'Status: Initializing...';
 
     peerConnection.onicecandidate = (event) => {
@@ -3667,29 +3850,51 @@ async function initPeerConnection() {
 
         if (state === 'connected') {
             console.log("PeerConnection: Connected");
-            if (p2pInstructionText) p2pInstructionText.textContent = "Connected! Click screen to start.";
+            // Add connected player to multiplayer system
+            const primaryOpponentId = 'opponent'; // For backward compatibility
+            connectedPlayers.set(primaryOpponentId, { playerId: primaryOpponentId, isConnected: true });
+            updateLegacyVariables();
+            updatePlayerCountDisplay();
         } else if (state === 'disconnected') {
             console.warn("PeerConnection: Disconnected. This might be temporary. Waiting for potential auto-reconnect or closure.");
-             if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
-             if (p2pInstructionText) p2pInstructionText.textContent = "Disconnected. Use P2P controls to reconnect.";
+            // Mark player as disconnected but don't remove yet
+            const primaryOpponentId = 'opponent';
+            const existingPlayer = connectedPlayers.get(primaryOpponentId);
+            if (existingPlayer) {
+                connectedPlayers.set(primaryOpponentId, { ...existingPlayer, isConnected: false });
+            }
+            updatePlayerCountDisplay();
+            if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
         } else if (state === 'failed') {
             console.error("PeerConnection: Failed. Attempting to reset P2P state.");
-             if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
-             if (p2pInstructionText) p2pInstructionText.textContent = "Connection Failed. Use P2P controls to reconnect.";
-             if (remotePlayerMesh) scene.remove(remotePlayerMesh); remotePlayerMesh = null;
-             remotePlayerHandgunMesh = null; remotePlayerSniperMesh = null; remotePlayerSMGMesh = null;
-             if (!isGameOver) resetP2PState(); 
+            // Remove failed connection
+            connectedPlayers.delete('opponent');
+            updateLegacyVariables();
+            updatePlayerCountDisplay();
+            if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
+            if (remotePlayerMesh) scene.remove(remotePlayerMesh); remotePlayerMesh = null;
+            remotePlayerHandgunMesh = null; remotePlayerSniperMesh = null; remotePlayerSMGMesh = null;
+            if (!isGameOver) resetP2PState(); 
         } else if (state === 'closed') {
             console.log("PeerConnection: Closed.");
-             if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
-             if (p2pInstructionText) p2pInstructionText.textContent = "Connection Closed. Use P2P controls to reconnect.";
-             if (remotePlayerMesh && remotePlayerMesh.parent) scene.remove(remotePlayerMesh); remotePlayerMesh = null;
-             remotePlayerHandgunMesh = null; remotePlayerSniperMesh = null; remotePlayerSMGMesh = null;
+            // Remove closed connection
+            connectedPlayers.delete('opponent');
+            updateLegacyVariables();
+            updatePlayerCountDisplay();
+            if (signalingPanel && gameMode === 'multiplayer') signalingPanel.style.display = 'block';
+            if (remotePlayerMesh && remotePlayerMesh.parent) scene.remove(remotePlayerMesh); remotePlayerMesh = null;
+            remotePlayerHandgunMesh = null; remotePlayerSniperMesh = null; remotePlayerSMGMesh = null;
         }
     };
     peerConnection.ondatachannel = (event) => {
         console.log("Data channel received:", event.channel.label);
         dataChannel = event.channel;
+        
+        // Add to multiplayer system
+        const primaryOpponentId = 'opponent';
+        dataChannels.set(primaryOpponentId, event.channel);
+        // Note: Don't call updateLegacyVariables() here as it might reset peerConnection
+        
         setupDataChannelEvents();
     };
 }
@@ -3922,22 +4127,37 @@ function setupDataChannelEvents() {
                     // Update playerHealth to sync with new system
                     
                     if (currentHealth <= 0) {
-                        opponentScore++;
+                        myDeaths++;
                         sendGameEvent({ type: 'i_was_defeated' });
-                        if (opponentScore >= KILLS_TO_WIN) {
+                        updateLegacyScores();
+                        
+                        if (checkDefeatCondition()) {
                             handleGameOver(false); 
                         } else {
                             // Reset both health systems
                             currentHealth = MAX_HEALTH;
-                                                        triggerRespawn();
+                            triggerRespawn();
                         }
                     }
                 } else if (gameEvent.type === 'i_was_defeated') {
                     if(isGameOver) return;
-                    myScore++;
-                    showTemporaryMessage(`Opponent Defeated! Your Score: ${myScore}`, 2000);
-                    if (myScore >= KILLS_TO_WIN) {
-                        handleGameOver(true); 
+                    // Handle opponent death in multiplayer
+                    const primaryOpponent = getPrimaryOpponentId();
+                    if (primaryOpponent) {
+                        const opponentDeaths = incrementPlayerDeaths(primaryOpponent);
+                        updateLegacyScores();
+                        showTemporaryMessage(`Opponent Defeated! (${opponentDeaths}/${DEATHS_TO_LOSE} deaths)`, 2000);
+                        
+                        if (checkVictoryCondition()) {
+                            handleGameOver(true); 
+                        }
+                    } else {
+                        // Legacy single opponent mode
+                        myScore++;
+                        showTemporaryMessage(`Opponent Defeated! Your Score: ${myScore}`, 2000);
+                        if (myScore >= DEATHS_TO_LOSE) {
+                            handleGameOver(true); 
+                        }
                     }
                 } else if (gameEvent.type === 'game_over_notif') {
                     const gameOverData = gameEvent.data as GameEventGameOverData;
@@ -3953,6 +4173,13 @@ function setupDataChannelEvents() {
                     
                     // Show bike damage message
                     showTemporaryMessage(`Bike Hit! -${bikeHitData.damageDealt} HP | Bike Health: ${Math.round(bikeHealth)}`, 2000);
+                } else if (gameEvent.type === 'start_game_request') {
+                    const requestData = gameEvent.data as GameEventStartGameRequestData;
+                    console.log(`Received game start request from player: ${requestData.requesterId}`);
+                    
+                    // Show notification and auto-start the game
+                    showTemporaryMessage(`Game starting! Request from ${requestData.requesterId}`, 2000);
+                    startGameFromRequest();
                 } else if (gameEvent.type === 'bike_exploded') {
                     const explodedData = gameEvent.data as GameEventBikeExplodedData;
                     
@@ -3983,6 +4210,12 @@ async function createOffer() {
     }
     console.log("Creating data channel 'gameData'.");
     dataChannel = peerConnection.createDataChannel("gameData");
+    
+    // Add to multiplayer system
+    const primaryOpponentId = 'opponent';
+    dataChannels.set(primaryOpponentId, dataChannel);
+    // Note: Don't call updateLegacyVariables() here as it might reset peerConnection
+    
     setupDataChannelEvents(); 
     try {
         const offer = await peerConnection.createOffer();
@@ -4185,6 +4418,29 @@ function sendPlayerState() {
     }
 }
 
+// Send game event to all connected players
+function sendGameEventToAllPlayers(event: GameEvent) {
+    const connectedIds = getConnectedPlayerIds();
+    for (const playerId of connectedIds) {
+        sendGameEventToPlayer(playerId, event);
+    }
+}
+
+// Send game event to a specific player
+function sendGameEventToPlayer(playerId: string, event: GameEvent) {
+    const channel = dataChannels.get(playerId);
+    if (channel && channel.readyState === 'open') {
+        try {
+            channel.send(JSON.stringify({ type: 'gameEvent', data: event }));
+        } catch (e) {
+            console.error(`Error sending game event to player ${playerId}:`, e, "\nEvent:", event);
+        }
+    } else {
+        console.warn(`Cannot send game event to player ${playerId}: channel not available or not open`);
+    }
+}
+
+// Legacy function for backward compatibility
 function sendGameEvent(event: GameEvent) {
     if (dataChannel && dataChannel.readyState === 'open') {
         try {
@@ -4192,6 +4448,9 @@ function sendGameEvent(event: GameEvent) {
         } catch (e) {
             console.error("Error sending game event:", e, "\nEvent:", event);
         }
+    } else {
+        // For new multiplayer mode, send to all players
+        sendGameEventToAllPlayers(event);
     }
 }
 
@@ -4499,18 +4758,20 @@ function updateHealthRegeneration(deltaTime: number): void {
         // Handle death the same way as damage death
         if (gameMode === 'multiplayer') {
           // In multiplayer, this counts as a death
-          opponentScore++;
+          myDeaths++;
           if (dataChannel && dataChannel.readyState === 'open') {
             sendGameEvent({ type: 'i_was_defeated' });
           }
-          if (opponentScore >= KILLS_TO_WIN) {
+          updateLegacyScores();
+          
+          if (checkDefeatCondition()) {
             handleGameOver(false); 
           } else {
             currentHealth = MAX_HEALTH;
-                        triggerRespawn();
+            triggerRespawn();
           }
         } else {
-          triggerGameOver();
+          handleGameOver(false);
         }
         return;
       }

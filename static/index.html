@@ -6,7 +6,9 @@
   <title>Simple FPS Game</title>
   <link rel="stylesheet" href="index.css">
   <script type="importmap">
-
+{
+  "imports": {}
+}
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
@@ -73,6 +75,12 @@
     <p>1 for Handgun, 2 for Sniper Rifle, 3 for SMG</p>
     <p>R to Reload | B for Scope Zoom (2x/4x/8x/16x) | Page Up/Down for Sniper Zeroing</p>
     <p id="p2p-instruction" style="display:none; margin-top: 10px; font-size: 16px;">Use P2P controls below to connect, then click to start.</p>
+    <div id="player-count-display" style="display:none; margin-top: 10px; font-size: 18px; color: #4CAF50;">
+      <strong>Connected Players: <span id="player-count">0</span></strong>
+    </div>
+    <button id="start-game-request-btn" style="display:none; margin-top: 10px; padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
+      Start Game
+    </button>
   </div>
 
   <div id="scope-overlay"></div> <!-- Added scope overlay div -->
