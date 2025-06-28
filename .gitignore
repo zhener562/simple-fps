@@ -3,4 +3,3 @@
 .shuttle*
 Secrets*.toml
 /static/node_modules
-/static/dist

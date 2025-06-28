@@ -1239,6 +1239,7 @@ interface GameEventHitOpponentData {
 
 interface GameEventGameOverData {
     winnerIsPlayerOne: boolean | null;
+    defeatedPlayerId?: string;
 }
 
 interface GameEventMapSeedData {
@@ -2047,7 +2048,7 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
 }
 
 // Handle remote game events from other players
-function handleRemoteGameEvent(gameEvent: GameEvent) {
+function handleRemoteGameEvent(gameEvent: GameEvent, senderId?: string) {
     if (gameEvent.type === 'map_seed' && !isPlayerOne) { 
         const seedData = gameEvent.data as GameEventMapSeedData;
         currentMapSeed = seedData.seed;
@@ -2143,7 +2144,17 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
         showTemporaryMessage("Enemy player defeated!", 500);
     }
     else if (gameEvent.type === 'game_over_notif') {
-        
+        const gameOverData = gameEvent.data as GameEventGameOverData;
+        console.log("Received game over notification:", gameOverData);
+        // Remove the defeated player's mesh from the scene
+        if (gameOverData.defeatedPlayerId) {
+            console.log(`Removing mesh for defeated player: ${gameOverData.defeatedPlayerId}`);
+            removeRemotePlayerMeshes(gameOverData.defeatedPlayerId);
+        } else if (senderId) {
+            // Fallback: use senderId if defeatedPlayerId is not available
+            console.log(`Removing mesh for defeated player (fallback): ${senderId}`);
+            removeRemotePlayerMeshes(senderId);
+        }
     }
     else if (gameEvent.type === 'bike_hit') {
         const bikeHitData = gameEvent.data as GameEventBikeHitData;
@@ -2196,7 +2207,7 @@ function handleDataChannelMessage(message: any, senderId: string) {
         updateLegacyRemotePlayerVariables();
         
     } else if (message.type === 'gameEvent') {
-        handleRemoteGameEvent(message.data as GameEvent);
+        handleRemoteGameEvent(message.data as GameEvent, senderId);
     }
 }
 
@@ -2599,12 +2610,7 @@ function resetGameScene() {
     lastFireTime = 0;
     isFiringSMGActual = false;
     
-    // Clean up legacy opponent ID that might remain from previous sessions
-    if (connectedPlayers.has('opponent')) {
-        console.log('Removing legacy opponent ID from connected players');
-        connectedPlayers.delete('opponent');
-        removeRemotePlayerMeshes('opponent');
-    }
+    
 
 
     if (gameMode === 'singleplayer') {
@@ -4817,6 +4823,13 @@ function setupDataChannelEvents() {
                     const gameOverData = gameEvent.data as GameEventGameOverData;
                     if (gameOverData.winnerIsPlayerOne !== null && !isGameOver) { 
                         const thisPlayerWon = (isPlayerOne === gameOverData.winnerIsPlayerOne);
+                        
+                        // Remove the defeated player's mesh from the scene
+                        if (gameOverData.defeatedPlayerId) {
+                            console.log(`Removing mesh for defeated player: ${gameOverData.defeatedPlayerId}`);
+                            removeRemotePlayerMeshes(gameOverData.defeatedPlayerId);
+                        }
+                        
                         handleGameOver(thisPlayerWon);
                     }
                 } else if (gameEvent.type === 'bike_hit') {
@@ -5207,7 +5220,10 @@ function handleGameOver(playerWon: boolean) {
         if (p2pInstructionText) p2pInstructionText.style.display = 'none';
     }
     if (dataChannel && dataChannel.readyState === 'open') { 
-         const gameOverData: GameEventGameOverData = { winnerIsPlayerOne: playerWon ? isPlayerOne : (isPlayerOne === null ? null : !isPlayerOne) };
+         const gameOverData: GameEventGameOverData = { 
+             winnerIsPlayerOne: playerWon ? isPlayerOne : (isPlayerOne === null ? null : !isPlayerOne),
+             defeatedPlayerId: playerWon ? undefined : (clientId || 'unknown')
+         };
          console.log("Sending game_over_notif, data:", gameOverData);
          sendGameEvent({ type: 'game_over_notif', data: gameOverData });
     }
