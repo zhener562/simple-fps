@@ -2,7 +2,6 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // Simple PRNG (Mulberry32)
 class PRNG {
@@ -98,7 +97,7 @@ let isOnBike = false;
 let bikeModel: THREE.Group | null = null;
 let bikeSpeed = 0;
 // 1000cc Superbike physics parameters (realistic performance)
-let bikeEnginePower = 4000.0; // ~200hp converted to force at wheels (extremely powerful)
+let bikeEnginePower = 1000.0; 
 let bikeAirDragCoefficient = 0.35; // Realistic aerodynamic coefficient for sports bike
 let bikeRollingResistance = 1.5; // Rolling resistance for high-performance tires
 let bikeMass = 180.0; // Lightweight superbike + rider (~200kg total, but more responsive)
@@ -106,7 +105,7 @@ let bikeBrakingForce = 12000.0; // Racing-grade brakes (extremely powerful)
 let bikeTurnSpeed = 4.0;
 let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
-let bikeCanUseWeapons: string[] = ['handgun']; // Only handgun allowed on bike
+let bikeCanUseWeapons: string[] = ['handgun', 'smg']; // Only handgun and SMG allowed on bike
 
 // Bike damage and collision system
 let bikeHealth = 100.0; // Maximum bike durability
@@ -644,7 +643,7 @@ const REMOTE_SMG_ADS_OFFSET = new THREE.Vector3(
 
 
 let lastSentStateTime = 0;
-const STATE_SEND_INTERVAL = 1000 / 20;
+const STATE_SEND_INTERVAL = INPUT_DELAY_MS;
 let isPlayerOne: boolean | null = null;
 
 // Get map scale based on map type
