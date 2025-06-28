@@ -603,6 +603,18 @@ async function getIceServersConfiguration(): Promise<RTCConfiguration> {
 }
 
 
+// Remote player management for multiplayer
+interface RemotePlayerMeshes {
+    mainMesh: THREE.Group;
+    handgunMesh: THREE.Mesh;
+    sniperMesh: THREE.Mesh;
+    smgMesh: THREE.Mesh;
+    bikeModel?: THREE.Group;
+}
+
+const remotePlayerMeshes = new Map<string, RemotePlayerMeshes>();
+
+// Legacy variables for backward compatibility
 let remotePlayerMesh: THREE.Group | null = null;
 let remotePlayerHandgunMesh: THREE.Mesh | null = null;
 let remotePlayerSniperMesh: THREE.Mesh | null = null;
@@ -715,17 +727,27 @@ function startGameFromRequest() {
 // Update UI to show connected player count
 function updatePlayerCountDisplay() {
     const connectedCount = getConnectedPlayerIds().length;
+    console.log(`[UI Update] Connected count: ${connectedCount}, Game mode: ${gameMode}`);
+    console.log(`[UI Update] Connected player IDs:`, getConnectedPlayerIds());
+    
     if (playerCountSpan) {
         playerCountSpan.textContent = connectedCount.toString();
+        console.log(`[UI Update] Updated player count span to: ${connectedCount}`);
+    } else {
+        console.warn('[UI Update] playerCountSpan element not found');
     }
     
     // Show/hide the display based on multiplayer mode and connections
     if (playerCountDisplay && gameMode === 'multiplayer') {
         playerCountDisplay.style.display = connectedCount > 0 ? 'block' : 'none';
+        console.log(`[UI Update] Player count display set to: ${connectedCount > 0 ? 'block' : 'none'}`);
         
         // Show start game button if there are connected players
         if (startGameRequestBtn) {
             startGameRequestBtn.style.display = connectedCount > 0 ? 'block' : 'none';
+            console.log(`[UI Update] Start game button set to: ${connectedCount > 0 ? 'block' : 'none'}`);
+        } else {
+            console.warn('[UI Update] startGameRequestBtn element not found');
         }
         
         // Update instruction text
@@ -735,11 +757,21 @@ function updatePlayerCountDisplay() {
             } else {
                 p2pInstructionText.textContent = "Use P2P controls below to connect, then click to start.";
             }
+            console.log(`[UI Update] Instruction text updated`);
+        } else {
+            console.warn('[UI Update] p2pInstructionText element not found');
         }
     } else {
         // Hide multiplayer UI in single player mode
         if (playerCountDisplay) playerCountDisplay.style.display = 'none';
         if (startGameRequestBtn) startGameRequestBtn.style.display = 'none';
+        console.log(`[UI Update] Multiplayer UI hidden (gameMode: ${gameMode})`);
+    }
+    
+    // Force UI refresh and provide manual start option
+    if (connectedCount >= 2) {
+        console.log(`[UI Update] 🎮 READY TO PLAY! ${connectedCount} players connected`);
+        console.log(`[UI Update] Use console command: startGameFromRequest() to start manually`);
     }
 }
 
@@ -1421,13 +1453,75 @@ function handleSignalingMessage(message: any) {
             console.log('Assigned client ID:', clientId);
             break;
             
-        case 'user-joined':
-            console.log('User joined room:', message.data);
-            if (isWaitingForOpponent && message.sender !== clientId) {
-                // Store the opponent's client ID for targeting messages
-                const opponentId = message.sender;
-                startAutomaticPeerConnection(true, opponentId); // We become the offer creator
+        case 'room-joined':
+            console.log('Successfully joined room:', message.data);
+            currentRoom = message.data.room_id;
+            const roomPlayers = message.data.players;
+            const playerCount = message.data.player_count;
+            
+            // Update UI
+            updatePlayerCountDisplay();
+            if (p2pStatusText) {
+                p2pStatusText.textContent = `Status: In room ${currentRoom} with ${playerCount} players`;
             }
+            
+            // For each existing player in the room, establish P2P connection
+            for (const playerId of roomPlayers) {
+                if (playerId !== clientId && !peerConnections.has(playerId)) {
+                    console.log('Establishing connection to existing player:', playerId);
+                    startAutomaticPeerConnection(true, playerId); // We create offer to existing players
+                }
+            }
+            break;
+            
+        case 'room-error':
+            console.error('Room join error:', message.data.error);
+            if (p2pStatusText) {
+                p2pStatusText.textContent = `Error: ${message.data.error}`;
+            }
+            isWaitingForOpponent = false;
+            break;
+            
+        case 'user-joined':
+            console.log('New user joined room:', message.data);
+            const newUserId = message.data.user_id;
+            const newPlayerCount = message.data.player_count;
+            
+            // Update UI
+            updatePlayerCountDisplay();
+            if (p2pStatusText) {
+                p2pStatusText.textContent = `Status: In room ${currentRoom} with ${newPlayerCount} players`;
+            }
+            
+            // Wait for the new player to send us an offer (they should be creating offers to existing players)
+            // No action needed here - we'll handle the offer when it arrives
+            break;
+            
+        case 'user-left':
+            console.log('User left room:', message.data);
+            const leftUserId = message.data.user_id;
+            
+            // Clean up P2P connection for the departed player
+            if (peerConnections.has(leftUserId)) {
+                const connection = peerConnections.get(leftUserId);
+                connection?.close();
+                peerConnections.delete(leftUserId);
+            }
+            
+            if (dataChannels.has(leftUserId)) {
+                const channel = dataChannels.get(leftUserId);
+                channel?.close();
+                dataChannels.delete(leftUserId);
+            }
+            
+            // Remove from connected players
+            connectedPlayers.delete(leftUserId);
+            
+            // Remove remote player meshes
+            removeRemotePlayerMeshes(leftUserId);
+            
+            // Update legacy variables
+            updateLegacyVariables();
             break;
             
         case 'offer':
@@ -1438,19 +1532,19 @@ function handleSignalingMessage(message: any) {
             
         case 'answer':
             if (message.sender !== clientId) {
-                handleRemoteAnswer(message.data);
+                handleRemoteAnswer(message.data, message.sender);
             }
             break;
             
         case 'ice-candidate':
             if (message.sender !== clientId) {
-                handleRemoteIceCandidate(message.data);
+                handleRemoteIceCandidate(message.data, message.sender);
             }
             break;
     }
 }
 
-function joinRoom(roomId: string) {
+function joinRoom(roomId: string, maxPlayers: number = 6) {
     if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
         console.error('Not connected to signaling server');
         return;
@@ -1461,15 +1555,18 @@ function joinRoom(roomId: string) {
     
     const joinMessage = {
         msg_type: 'join-room',
-        data: { room_id: roomId },
+        data: { 
+            room_id: roomId,
+            max_players: maxPlayers
+        },
         target: null,
         sender: clientId
     };
     
     signalingSocket.send(JSON.stringify(joinMessage));
-    console.log('Joined room:', roomId);
+    console.log('Joining room:', roomId, 'with max players:', maxPlayers);
     
-    if (p2pStatusText) p2pStatusText.textContent = `Status: Waiting for opponent in room ${roomId}`;
+    if (p2pStatusText) p2pStatusText.textContent = `Status: Joining room ${roomId}...`;
     
     // Set timeout for matchmaking
     if (matchmakingTimeout) clearTimeout(matchmakingTimeout);
@@ -1488,20 +1585,536 @@ let opponentClientId: string | null = null;
 // Mouse sensitivity setting
 let mouseSensitivity = 1.0; // Default sensitivity multiplier
 
-async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOpponentId?: string) {
+// Create a peer connection for a specific player
+async function initPeerConnectionForPlayer(playerId: string): Promise<RTCPeerConnection> {
+    console.log("Initializing PeerConnection for player:", playerId);
+    
+    // Close existing connection if it exists
+    if (peerConnections.has(playerId)) {
+        const existingConnection = peerConnections.get(playerId);
+        if (existingConnection && existingConnection.signalingState !== 'closed') {
+            console.log("Closing existing PeerConnection for:", playerId);
+            existingConnection.close();
+        }
+    }
+    
+    const rtcConfig = await getIceServersConfiguration();
+    const connection = new RTCPeerConnection(rtcConfig);
+    console.log("PeerConnection created for player:", playerId, "with configuration:", rtcConfig);
+    
+    // Store the connection
+    peerConnections.set(playerId, connection);
+    
+    // Set up event handlers
+    connection.onicecandidate = (event) => {
+        if (event.candidate) {
+            console.log("Local ICE candidate gathered for player:", playerId, event.candidate);
+            sendSignalingMessage('ice-candidate', event.candidate, playerId);
+        }
+    };
+    
+    connection.onconnectionstatechange = () => {
+        console.log(`Connection state for ${playerId}:`, connection.connectionState);
+        if (connection.connectionState === 'connected') {
+            console.log(`P2P connection established with ${playerId}`);
+            updatePlayerCountDisplay();
+            if (p2pStatusText) p2pStatusText.textContent = `Status: Connected to ${getConnectedPlayerIds().length} players`;
+        } else if (connection.connectionState === 'disconnected' || connection.connectionState === 'failed') {
+            console.log(`P2P connection lost with ${playerId}`);
+            // Clean up this connection
+            peerConnections.delete(playerId);
+            dataChannels.delete(playerId);
+            connectedPlayers.delete(playerId);
+            
+            // Remove remote player meshes
+            removeRemotePlayerMeshes(playerId);
+            
+            updateLegacyVariables();
+            updatePlayerCountDisplay();
+        }
+    };
+    
+    // Create data channel for this peer
+    const channel = connection.createDataChannel('gameData', { ordered: false });
+    setupDataChannelForPlayer(channel, playerId);
+    dataChannels.set(playerId, channel);
+    
+    // Handle incoming data channels
+    connection.ondatachannel = (event) => {
+        console.log('Received data channel from:', playerId);
+        const receivedChannel = event.channel;
+        setupDataChannelForPlayer(receivedChannel, playerId);
+        dataChannels.set(playerId, receivedChannel);
+    };
+    
+    return connection;
+}
+
+// Create an offer for a specific player
+async function createOfferForPlayer(playerId: string) {
+    const connection = peerConnections.get(playerId);
+    if (!connection) {
+        console.error('No peer connection found for player:', playerId);
+        return;
+    }
+    
     try {
-        if (targetOpponentId) {
-            opponentClientId = targetOpponentId;
+        console.log('Creating offer for player:', playerId);
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        console.log('Local description set, sending offer to:', playerId);
+        
+        sendSignalingMessage('offer', offer, playerId);
+    } catch (error) {
+        console.error('Error creating offer for player:', playerId, error);
+    }
+}
+
+// Set up data channel event handlers for a specific player
+function setupDataChannelForPlayer(channel: RTCDataChannel, playerId: string) {
+    channel.onopen = () => {
+        console.log(`Data channel opened for player: ${playerId}`);
+        connectedPlayers.set(playerId, { playerId, isConnected: true });
+        updateLegacyVariables();
+        updatePlayerCountDisplay();
+        
+        if (p2pStatusText) {
+            p2pStatusText.textContent = `Status: Connected to ${getConnectedPlayerIds().length} players`;
+        }
+    };
+    
+    channel.onclose = () => {
+        console.log(`Data channel closed for player: ${playerId}`);
+        connectedPlayers.delete(playerId);
+        updateLegacyVariables();
+        updatePlayerCountDisplay();
+    };
+    
+    channel.onmessage = (event) => {
+        if (isGameOver && JSON.parse(event.data as string).type !== 'game_over_notif') return;
+        try {
+            const message = JSON.parse(event.data as string);
+            handleDataChannelMessage(message, playerId);
+        } catch (error) {
+            console.error(`Error parsing message from ${playerId}:`, error);
+        }
+    };
+}
+
+// Send a signaling message to a specific player
+function sendSignalingMessage(messageType: string, data: any, targetPlayer: string) {
+    if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+        console.error('Cannot send signaling message: not connected to server');
+        return;
+    }
+    
+    const message = {
+        msg_type: messageType,
+        data: data,
+        target: targetPlayer,
+        sender: clientId
+    };
+    
+    signalingSocket.send(JSON.stringify(message));
+    console.log('Sent signaling message:', messageType, 'to:', targetPlayer);
+}
+
+// Create remote player meshes for a specific player
+function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
+    console.log('Creating remote player meshes for:', playerId);
+    
+    const remotePlayerMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xff4500, 
+        roughness: 0.6, 
+        metalness: 0.3 
+    });
+    
+    const mainMesh = new THREE.Group();
+    mainMesh.name = `remotePlayer_${playerId}`;
+
+    // Head
+    const headGeometry = new THREE.SphereGeometry(REMOTE_PLAYER_HEAD_RADIUS, 16, 12);
+    const headMesh = new THREE.Mesh(headGeometry, remotePlayerMaterial);
+    headMesh.position.y = REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y + REMOTE_PLAYER_HEAD_RADIUS;
+    headMesh.castShadow = true;
+    headMesh.receiveShadow = true;
+    mainMesh.add(headMesh);
+
+    // Torso
+    const torsoGeometry = new THREE.BoxGeometry(REMOTE_PLAYER_TORSO_SIZE.x, REMOTE_PLAYER_TORSO_SIZE.y, REMOTE_PLAYER_TORSO_SIZE.z);
+    const torsoMesh = new THREE.Mesh(torsoGeometry, remotePlayerMaterial);
+    torsoMesh.position.y = REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y / 2;
+    torsoMesh.castShadow = true;
+    torsoMesh.receiveShadow = true;
+    mainMesh.add(torsoMesh);
+
+    // Legs
+    const legsGeometry = new THREE.BoxGeometry(REMOTE_PLAYER_LEGS_SIZE.x, REMOTE_PLAYER_LEGS_SIZE.y, REMOTE_PLAYER_LEGS_SIZE.z);
+    const legsMesh = new THREE.Mesh(legsGeometry, remotePlayerMaterial);
+    legsMesh.position.y = REMOTE_PLAYER_LEGS_SIZE.y / 2;
+    legsMesh.castShadow = true;
+    legsMesh.receiveShadow = true;
+    mainMesh.add(legsMesh);
+
+    // Weapons
+    const remoteGunMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    
+    // Handgun
+    const remoteHandgunGeom = new THREE.CylinderGeometry(0.05, 0.05, 0.4, 8);
+    const handgunMesh = new THREE.Mesh(remoteHandgunGeom, remoteGunMaterial);
+    handgunMesh.castShadow = true;
+    handgunMesh.visible = true;
+    mainMesh.add(handgunMesh);
+
+    // Sniper
+    const remoteSniperGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.8, 8);
+    const sniperMesh = new THREE.Mesh(remoteSniperGeom, remoteGunMaterial);
+    sniperMesh.castShadow = true;
+    sniperMesh.visible = false;
+    mainMesh.add(sniperMesh);
+
+    // SMG
+    const remoteSMGGeom = new THREE.BoxGeometry(0.08, 0.08, 0.5);
+    const smgMesh = new THREE.Mesh(remoteSMGGeom, remoteGunMaterial);
+    smgMesh.castShadow = true;
+    smgMesh.visible = false;
+    mainMesh.add(smgMesh);
+
+    scene.add(mainMesh);
+
+    const meshes: RemotePlayerMeshes = {
+        mainMesh,
+        handgunMesh,
+        sniperMesh,
+        smgMesh
+    };
+
+    remotePlayerMeshes.set(playerId, meshes);
+    
+    // Update legacy variables for the first (primary) player
+    updateLegacyRemotePlayerVariables();
+    
+    return meshes;
+}
+
+// Remove remote player meshes for a specific player
+function removeRemotePlayerMeshes(playerId: string) {
+    console.log('Removing remote player meshes for:', playerId);
+    
+    const meshes = remotePlayerMeshes.get(playerId);
+    if (meshes) {
+        // Remove from scene
+        scene.remove(meshes.mainMesh);
+        
+        // Remove bike if it exists
+        if (meshes.bikeModel) {
+            scene.remove(meshes.bikeModel);
         }
         
-        await initPeerConnection();
-        console.log('After initPeerConnection, peerConnection:', peerConnection);
+        // Clean up geometry and materials
+        meshes.mainMesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                child.geometry.dispose();
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(material => material.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+        });
+        
+        remotePlayerMeshes.delete(playerId);
+        
+        // Update legacy variables
+        updateLegacyRemotePlayerVariables();
+    }
+}
+
+// Update legacy variables for backward compatibility
+function updateLegacyRemotePlayerVariables() {
+    const primaryOpponentId = getPrimaryOpponentId();
+    if (primaryOpponentId && remotePlayerMeshes.has(primaryOpponentId)) {
+        const meshes = remotePlayerMeshes.get(primaryOpponentId)!;
+        remotePlayerMesh = meshes.mainMesh;
+        remotePlayerHandgunMesh = meshes.handgunMesh;
+        remotePlayerSniperMesh = meshes.sniperMesh;
+        remotePlayerSMGMesh = meshes.smgMesh;
+        remotePlayerBikeModel = meshes.bikeModel || null;
+    } else {
+        remotePlayerMesh = null;
+        remotePlayerHandgunMesh = null;
+        remotePlayerSniperMesh = null;
+        remotePlayerSMGMesh = null;
+        remotePlayerBikeModel = null;
+    }
+}
+
+// Update weapon display for a specific remote player
+function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, weaponType: 'handgun' | 'sniper' | 'smg') {
+    const meshes = remotePlayerMeshes.get(playerId);
+    if (!meshes) return;
+    
+    // Hide all weapons first
+    meshes.handgunMesh.visible = false;
+    meshes.sniperMesh.visible = false;
+    meshes.smgMesh.visible = false;
+    
+    // Show and position the active weapon
+    let activeMesh: THREE.Mesh;
+    let hipOffset: THREE.Vector3;
+    let adsOffset: THREE.Vector3;
+    
+    switch (weaponType) {
+        case 'handgun':
+            activeMesh = meshes.handgunMesh;
+            hipOffset = REMOTE_HANDGUN_HIP_OFFSET;
+            adsOffset = REMOTE_HANDGUN_ADS_OFFSET;
+            break;
+        case 'sniper':
+            activeMesh = meshes.sniperMesh;
+            hipOffset = REMOTE_SNIPER_HIP_OFFSET;
+            adsOffset = REMOTE_SNIPER_ADS_OFFSET;
+            break;
+        case 'smg':
+            activeMesh = meshes.smgMesh;
+            hipOffset = REMOTE_SMG_HIP_OFFSET;
+            adsOffset = REMOTE_SMG_ADS_OFFSET;
+            break;
+    }
+    
+    activeMesh.visible = true;
+    
+    // Position weapon based on aiming state
+    if (aiming) {
+        activeMesh.position.copy(adsOffset);
+        activeMesh.rotation.x = 0;
+    } else {
+        activeMesh.position.copy(hipOffset);
+        activeMesh.rotation.x = Math.PI / 2;
+    }
+}
+
+// Update bike display for a specific remote player
+function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
+    const meshes = remotePlayerMeshes.get(playerId);
+    if (!meshes) return;
+    
+    if (state.isOnBike) {
+        // Create bike model if it doesn't exist
+        if (!meshes.bikeModel) {
+            meshes.bikeModel = createBikeModel();
+            meshes.bikeModel.name = `remoteBike_${playerId}`;
+            scene.add(meshes.bikeModel);
+            console.log("Created remote bike model for:", playerId);
+        }
+        
+        // Use bike position if available, otherwise fall back to player position
+        const bikePos = state.bikePosition || state.position;
+        let bikeY = bikePos.y;
+        
+        // For bike mode, trust the sent position more and apply minimal adjustment
+        if (currentMapType === MapType.MOUNTAIN && state.bikePosition) {
+            // Only apply terrain adjustment if significantly below expected height
+            const terrainHeight = getTerrainHeightAt(bikePos.x, bikePos.z);
+            if (bikeY < terrainHeight - 1) {
+                bikeY = terrainHeight;
+            }
+        }
+        
+        meshes.bikeModel.position.set(bikePos.x, bikeY, bikePos.z);
+        
+        if (typeof state.bikeDirection === 'number') {
+            meshes.bikeModel.rotation.y = state.bikeDirection;
+        }
+        
+        if (typeof state.bikeBankAngle === 'number') {
+            meshes.bikeModel.rotation.z = state.bikeBankAngle;
+        }
+        
+        meshes.bikeModel.visible = true;
+        meshes.mainMesh.visible = false; // Hide player model when on bike
+    } else {
+        // Hide bike when not in use
+        if (meshes.bikeModel) {
+            meshes.bikeModel.visible = false;
+        }
+        meshes.mainMesh.visible = true; // Show player model
+    }
+}
+
+// Handle remote game events from other players
+function handleRemoteGameEvent(gameEvent: GameEvent) {
+    if (gameEvent.type === 'map_seed' && !isPlayerOne) { 
+        const seedData = gameEvent.data as GameEventMapSeedData;
+        currentMapSeed = seedData.seed;
+        currentMapType = seedData.mapType; 
+        prng = new PRNG(currentMapSeed!); 
+        spawnPrng = new PRNG(currentMapSeed! + getSpawnSeedOffset()); 
+        console.log("Received and set map seed:", currentMapSeed, "and map type:", currentMapType);
+        resetGameScene(); 
+    }
+    else if (gameEvent.type === 'shoot' && gameEvent.data) {
+         const shootData = gameEvent.data as GameEventShootData;
+         if (shootData.muzzlePosition && shootData.direction) {
+            const projectileMesh = new THREE.Mesh(projectileGeometry, remoteProjectileMaterial); 
+            projectileMesh.castShadow = true;
+            projectileMesh.position.set(shootData.muzzlePosition.x, shootData.muzzlePosition.y, shootData.muzzlePosition.z);
+            
+            let speed = weaponStatsDB.handgun.projectileSpeed!; // Default
+            if (shootData.weaponType === 'sniper' && weaponStatsDB.sniper.projectileSpeed) {
+                speed = weaponStatsDB.sniper.projectileSpeed;
+            } else if (shootData.weaponType === 'smg' && weaponStatsDB.smg.projectileSpeed) {
+                speed = weaponStatsDB.smg.projectileSpeed;
+            }
+            
+            const remoteProj: RemoteProjectile = {
+                mesh: projectileMesh,
+                velocity: new THREE.Vector3(shootData.direction.x, shootData.direction.y, shootData.direction.z).multiplyScalar(speed),
+                lifeTime: 0,
+                spawnTime: performance.now(),
+                weaponType: shootData.weaponType,
+                distanceTraveled: 0,
+                initialPosition: new THREE.Vector3(shootData.muzzlePosition.x, shootData.muzzlePosition.y, shootData.muzzlePosition.z)
+            };
+            scene.add(projectileMesh);
+            remoteProjectiles.push(remoteProj);
+         }
+    }
+    else if (gameEvent.type === 'hit_opponent') {
+        if(isGameOver) return;
+        const hitData = gameEvent.data as GameEventHitOpponentData;
+        
+        // Use the new health system
+        takeDamage(hitData.damageDealt);
+
+        const hitOverlay = document.createElement('div');
+        hitOverlay.style.position = 'absolute'; hitOverlay.style.top = '0'; hitOverlay.style.left = '0';
+        hitOverlay.style.width = '100%'; hitOverlay.style.height = '100%';
+        
+        // Different visual feedback for headshots
+        if (hitData.isHeadshot) {
+            hitOverlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Yellow for headshot
+        } else {
+            hitOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)'; // Red for body shot
+        }
+        
+        hitOverlay.style.zIndex = '1000';
+        document.body.appendChild(hitOverlay);
+        setTimeout(() => { if (document.body.contains(hitOverlay)) document.body.removeChild(hitOverlay); }, 150);
+        
+        // Different messages for headshots
+        const hitMessage = hitData.isHeadshot 
+            ? `HEADSHOT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`
+            : `HIT! -${hitData.damageDealt} HP | Health: ${Math.round(currentHealth)}`;
+        showTemporaryMessage(hitMessage, 2000);
+
+        if (currentHealth <= 0) {
+            myDeaths++;
+            sendGameEventToAllPlayers({ type: 'i_was_defeated' });
+            updateLegacyScores();
+            
+            if (checkDefeatCondition()) {
+                handleGameOver(false);
+                return;
+            }
+            
+            // Reset spawn point after death
+            currentHealth = MAX_HEALTH;
+            triggerRespawn();
+        }
+    }
+    else if (gameEvent.type === 'i_was_defeated') {
+        if(isGameOver) return;
+        // Another player was defeated - need to figure out which one
+        // For now, increment the primary opponent's deaths for backward compatibility
+        const primaryOpponentId = getPrimaryOpponentId();
+        if (primaryOpponentId) {
+            incrementPlayerDeaths(primaryOpponentId);
+            updateLegacyScores();
+            
+            if (checkVictoryCondition()) {
+                handleGameOver(true);
+                return;
+            }
+        }
+        showTemporaryMessage("Enemy player defeated!", 2000);
+    }
+    else if (gameEvent.type === 'game_over_notif') {
+        if(isGameOver) return;
+        const gameOverData = gameEvent.data as GameEventGameOverData;
+        handleGameOver(gameOverData.winnerIsPlayerOne !== null ? gameOverData.winnerIsPlayerOne : false);
+    }
+    else if (gameEvent.type === 'bike_hit') {
+        const bikeHitData = gameEvent.data as GameEventBikeHitData;
+        takeDamage(bikeHitData.damageDealt);
+        showTemporaryMessage(`Bike collision! -${bikeHitData.damageDealt} HP`, 2000);
+    }
+    else if (gameEvent.type === 'bike_exploded') {
+        const bikeExplosionData = gameEvent.data as GameEventBikeExplodedData;
+        showTemporaryMessage("Enemy bike exploded!", 2000);
+    }
+    else if (gameEvent.type === 'start_game_request') {
+        const requestData = gameEvent.data as GameEventStartGameRequestData;
+        showTemporaryMessage(`${requestData.requesterId} wants to start the game`, 3000);
+        
+        // Auto-accept game start requests in multiplayer
+        if (gameMode === 'multiplayer') {
+            startGameFromRequest();
+        }
+    }
+}
+
+// Handle incoming data channel messages from a specific player
+function handleDataChannelMessage(message: any, senderId: string) {
+    if (message.type === 'playerState') {
+        const state = message.data as PlayerState;
+        
+        // Ensure remote player meshes exist for this sender
+        if (!remotePlayerMeshes.has(senderId)) {
+            createRemotePlayerMeshes(senderId);
+        }
+        
+        const meshes = remotePlayerMeshes.get(senderId)!;
+        
+        // Adjust remote player position for terrain height
+        let adjustedY = state.position.y - PLAYER_HEIGHT;
+        if (currentMapType === MapType.MOUNTAIN) {
+            const terrainHeight = getTerrainHeightAt(state.position.x, state.position.z);
+            adjustedY = Math.max(adjustedY, terrainHeight);
+        }
+
+        meshes.mainMesh.position.set(state.position.x, adjustedY + PLAYER_HEIGHT, state.position.z);
+        meshes.mainMesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+        
+        updateRemotePlayerWeaponForPlayer(senderId, state.aiming, state.weaponType);
+        updateRemotePlayerBikeForPlayer(senderId, state);
+        
+        // Update legacy variables if this is the primary opponent
+        updateLegacyRemotePlayerVariables();
+        
+    } else if (message.type === 'gameEvent') {
+        handleRemoteGameEvent(message.data as GameEvent);
+    }
+}
+
+async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOpponentId?: string) {
+    try {
+        if (!targetOpponentId) {
+            console.error('Target opponent ID is required for peer connection');
+            return;
+        }
+        
+        // Don't create duplicate connections
+        if (peerConnections.has(targetOpponentId)) {
+            console.log('Connection already exists for:', targetOpponentId);
+            return;
+        }
+        
+        console.log('Starting peer connection to:', targetOpponentId);
+        await initPeerConnectionForPlayer(targetOpponentId);
         
         if (shouldCreateOffer) {
-            isPlayerOne = true;
-            await createAutomaticOffer();
-        } else {
-            isPlayerOne = false;
+            await createOfferForPlayer(targetOpponentId);
         }
         
         isWaitingForOpponent = false;
@@ -1556,60 +2169,63 @@ async function createAutomaticOffer() {
 }
 
 async function handleRemoteOffer(offer: RTCSessionDescriptionInit, senderId: string) {
-    if (!peerConnection) {
-        opponentClientId = senderId; // Store opponent ID
-        await initPeerConnection();
-        isPlayerOne = false;
+    console.log('Received offer from:', senderId);
+    
+    // Create peer connection for this sender if it doesn't exist
+    if (!peerConnections.has(senderId)) {
+        await initPeerConnectionForPlayer(senderId);
+    }
+    
+    const connection = peerConnections.get(senderId);
+    if (!connection) {
+        console.error('Failed to get peer connection for:', senderId);
+        return;
     }
     
     try {
-        await peerConnection!.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await peerConnection!.createAnswer();
-        await peerConnection!.setLocalDescription(answer);
+        await connection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await connection.createAnswer();
+        await connection.setLocalDescription(answer);
         
-        // Send answer through signaling server
-        if (signalingSocket) {
-            const answerMessage = {
-                msg_type: 'answer',
-                data: answer,
-                target: senderId,
-                sender: clientId
-            };
-            signalingSocket.send(JSON.stringify(answerMessage));
-            console.log('Sent automatic answer to', senderId);
-        }
+        console.log('Created answer for:', senderId);
+        sendSignalingMessage('answer', answer, senderId);
         
     } catch (error) {
         console.error('Error handling remote offer:', error);
     }
 }
 
-async function handleRemoteAnswer(answer: RTCSessionDescriptionInit) {
-    if (!peerConnection) {
-        console.error('Peer connection not found when handling answer');
+async function handleRemoteAnswer(answer: RTCSessionDescriptionInit, senderId: string) {
+    const connection = peerConnections.get(senderId);
+    if (!connection) {
+        console.error('Peer connection not found for sender:', senderId);
         return;
     }
     
     try {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log('Set remote answer successfully');
+        await connection.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log('Set remote answer successfully for peer:', senderId);
+        
+        // Update legacy variable for backward compatibility
+        updateLegacyVariables();
     } catch (error) {
-        console.error('Error handling remote answer:', error);
+        console.error('Error handling remote answer from', senderId, ':', error);
     }
 }
 
-async function handleRemoteIceCandidate(candidateData: any) {
-    if (!peerConnection) {
-        console.error('Peer connection not found when handling ICE candidate');
+async function handleRemoteIceCandidate(candidateData: any, senderId: string) {
+    const connection = peerConnections.get(senderId);
+    if (!connection) {
+        console.error('Peer connection not found for sender:', senderId);
         return;
     }
     
     try {
         const candidate = new RTCIceCandidate(candidateData);
-        await peerConnection.addIceCandidate(candidate);
-        console.log('Added remote ICE candidate');
+        await connection.addIceCandidate(candidate);
+        console.log('Added remote ICE candidate for peer:', senderId);
     } catch (error) {
-        console.error('Error adding remote ICE candidate:', error);
+        console.error('Error adding remote ICE candidate from', senderId, ':', error);
     }
 }
 
@@ -4383,7 +4999,7 @@ async function addRemoteIceCandidate() {
 }
 
 function sendPlayerState() {
-    if (dataChannel && dataChannel.readyState === 'open' && controls.isLocked && !isGameOver) {
+    if (controls.isLocked && !isGameOver) {
         const playerObject = controls.getObject();
         
         // Use bike position when on bike, otherwise use player position
@@ -4410,10 +5026,37 @@ function sendPlayerState() {
             });
         }
         
-        try {
-            dataChannel.send(JSON.stringify({ type: 'playerState', data: state }));
-        } catch (e) {
-            console.error("Error sending player state:", e);
+        // Send to ALL connected players (new multiplayer system)
+        const connectedIds = getConnectedPlayerIds();
+        let sentCount = 0;
+        
+        for (const playerId of connectedIds) {
+            const channel = dataChannels.get(playerId);
+            if (channel && channel.readyState === 'open') {
+                try {
+                    channel.send(JSON.stringify({ type: 'playerState', data: state }));
+                    sentCount++;
+                } catch (e) {
+                    console.error(`Error sending player state to ${playerId}:`, e);
+                }
+            }
+        }
+        
+        // Fallback to legacy system for backward compatibility
+        if (sentCount === 0 && dataChannel && dataChannel.readyState === 'open') {
+            try {
+                dataChannel.send(JSON.stringify({ type: 'playerState', data: state }));
+                console.log("Sent player state via legacy channel");
+            } catch (e) {
+                console.error("Error sending player state via legacy channel:", e);
+            }
+        }
+        
+        // Debug output for troubleshooting
+        if (sentCount > 0) {
+            console.log(`📡 Sent player state to ${sentCount} players:`, connectedIds);
+        } else {
+            console.warn("⚠️ Failed to send player state to any players");
         }
     }
 }
@@ -5124,6 +5767,7 @@ function updateProjectiles(delta: number) {
     if (!hitSomething && gameMode === 'multiplayer' && remotePlayerMesh && remotePlayerMesh.parent) { 
         let isHeadshot = false;
         let hitSomethingThisFrame = false;
+        let hitPlayerId: string | null = null;
         
         // First, check specifically for headshot by testing individual body parts
         // Get head mesh specifically (should be the first child with sphere geometry)
@@ -5155,20 +5799,46 @@ function updateProjectiles(delta: number) {
             }
         }
         
-        // If no headshot, check for general body hit
+        // If no headshot, check for general body hit with all remote players
         if (!hitSomethingThisFrame) {
-            const remotePlayerBoundingBox = new THREE.Box3().setFromObject(remotePlayerMesh);
-            const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
-            
-            if (projectileSegmentLength >= 0.0001) {
-                const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
-                if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
-                    hitSomethingThisFrame = true;
+            // Check collision with all remote players
+            for (const [playerId, meshes] of remotePlayerMeshes) {
+                if (meshes.mainMesh.visible) { // Only check visible players (not on bikes)
+                    const remotePlayerBoundingBox = new THREE.Box3().setFromObject(meshes.mainMesh);
+                    const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
+                    
+                    if (projectileSegmentLength >= 0.0001) {
+                        const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
+                        if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
+                            hitSomethingThisFrame = true;
+                            hitPlayerId = playerId; // Track which player was hit
+                            break;
+                        }
+                    }
+                    
+                    if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
+                        hitSomethingThisFrame = true;
+                        hitPlayerId = playerId; // Track which player was hit
+                        break;
+                    }
                 }
             }
             
-            if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
-                hitSomethingThisFrame = true;
+            // Fallback to legacy system for backward compatibility
+            if (!hitSomethingThisFrame && remotePlayerMesh && remotePlayerMesh.visible) {
+                const remotePlayerBoundingBox = new THREE.Box3().setFromObject(remotePlayerMesh);
+                const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
+                
+                if (projectileSegmentLength >= 0.0001) {
+                    const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
+                    if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
+                        hitSomethingThisFrame = true;
+                    }
+                }
+                
+                if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
+                    hitSomethingThisFrame = true;
+                }
             }
         }
             
