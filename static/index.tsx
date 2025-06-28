@@ -67,6 +67,7 @@ const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
 
 const INPUT_DELAY_MS = 50;
+
 interface PendingInput {
   timestamp: number;
   action: () => void;
@@ -2512,7 +2513,7 @@ function initThreeJSGame() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = false; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   gameContainer.appendChild(renderer.domElement);
 
   controls = new PointerLockControls(camera, renderer.domElement);
