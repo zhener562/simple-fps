@@ -1,6 +1,6 @@
 
 import * as THREE from 'three';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { PointerLockControls } from './controls/PointerLockControls.local.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 // Simple PRNG (Mulberry32)
@@ -1339,6 +1339,9 @@ function joinRoom(roomId: string) {
 // Add opponent tracking variable
 let opponentClientId: string | null = null;
 
+// Mouse sensitivity setting
+let mouseSensitivity = 1.0; // Default sensitivity multiplier
+
 async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOpponentId?: string) {
     try {
         if (targetOpponentId) {
@@ -1553,8 +1556,16 @@ function initializeApp() {
   const mapRandomButton = document.getElementById('map-random-btn') as HTMLButtonElement;
   const mapSelectionButtons = [mapArenaButton, mapUrbanButton, mapForestButton, mapPlainsButton, mapMountainButton, mapRandomButton];
 
-  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapMountainButton || !mapRandomButton) {
-      console.error("Map selection buttons not found!");
+  // Settings Panel Elements
+  const settingsBtn = document.getElementById('settings-btn') as HTMLButtonElement;
+  const settingsPanel = document.getElementById('settings-panel') as HTMLDivElement;
+  const backToMenuBtn = document.getElementById('back-to-menu-btn') as HTMLButtonElement;
+  const sensitivitySlider = document.getElementById('mouse-sensitivity-slider') as HTMLInputElement;
+  const sensitivityValueSpan = document.getElementById('sensitivity-value') as HTMLSpanElement;
+
+  if (!mapArenaButton || !mapUrbanButton || !mapForestButton || !mapPlainsButton || !mapMountainButton || !mapRandomButton || !settingsBtn || !settingsPanel || !backToMenuBtn || !sensitivitySlider || !sensitivityValueSpan) {
+      console.error("UI elements not found!");
+      return;
   } else {
       function updateSelectedMapButton(selectedBtn: HTMLButtonElement) {
           mapSelectionButtons.forEach(btn => {
@@ -1589,6 +1600,37 @@ function initializeApp() {
       });
       // Set default selected button visual state
       updateSelectedMapButton(mapRandomButton);
+  }
+
+  // Settings Panel Logic
+  settingsBtn.addEventListener('click', () => {
+    mainMenuDiv.style.display = 'none';
+    settingsPanel.style.display = 'flex';
+  });
+
+  backToMenuBtn.addEventListener('click', () => {
+    settingsPanel.style.display = 'none';
+    mainMenuDiv.style.display = 'flex';
+  });
+
+  sensitivitySlider.addEventListener('input', () => {
+    const value = parseFloat(sensitivitySlider.value);
+    sensitivityValueSpan.textContent = value.toFixed(1);
+    mouseSensitivity = value;
+    if (controls) {
+      controls.sensitivity = 0.002 * mouseSensitivity;
+    }
+    // Save to localStorage
+    localStorage.setItem('mouseSensitivity', value.toString());
+  });
+
+  // Load sensitivity from localStorage on startup
+  const savedSensitivity = localStorage.getItem('mouseSensitivity');
+  if (savedSensitivity) {
+    const value = parseFloat(savedSensitivity);
+    mouseSensitivity = value;
+    sensitivitySlider.value = value.toString();
+    sensitivityValueSpan.textContent = value.toFixed(1);
   }
 }
 
@@ -2454,10 +2496,11 @@ function initThreeJSGame() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = false; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   gameContainer.appendChild(renderer.domElement);
 
   controls = new PointerLockControls(camera, renderer.domElement);
+  controls.sensitivity = 0.002 * mouseSensitivity;
   
   // Store original mouse move function for sensitivity modification
   const originalOnMouseMove = (controls as any).onMouseMove;
