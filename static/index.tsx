@@ -28,14 +28,30 @@ let currentMapSeed: number | null = null;
 
 // Spawn randomization constants
 const SPAWN_SEED_OFFSET_P1 = 12345; // Player 1 spawn seed offset
-const SPAWN_SEED_OFFSET_P2 = 54321; // Player 2 spawn seed offset (different for unique spawns)
+const SPAWN_SEED_OFFSET_P2 = 54321; // Player 2 spawn seed offset
+const SPAWN_SEED_OFFSET_P3 = 98765; // Player 3 spawn seed offset
+const SPAWN_SEED_OFFSET_P4 = 13579; // Player 4 spawn seed offset
 
-// Get player-specific spawn seed offset
+// Get player-specific spawn seed offset based on client ID hash
 function getSpawnSeedOffset(): number {
     if (gameMode === 'singleplayer') {
         return SPAWN_SEED_OFFSET_P1; // Use P1 offset for single player
     }
-    return isPlayerOne ? SPAWN_SEED_OFFSET_P1 : SPAWN_SEED_OFFSET_P2;
+    
+    // For multiplayer, use client ID to determine unique spawn offset
+    if (!clientId) return SPAWN_SEED_OFFSET_P1;
+    
+    // Create a simple hash from client ID to determine player order
+    let hash = 0;
+    for (let i = 0; i < clientId.length; i++) {
+        const char = clientId.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    const playerIndex = Math.abs(hash) % 4; // Support up to 4 players
+    const offsets = [SPAWN_SEED_OFFSET_P1, SPAWN_SEED_OFFSET_P2, SPAWN_SEED_OFFSET_P3, SPAWN_SEED_OFFSET_P4];
+    return offsets[playerIndex];
 }
 
 
@@ -215,13 +231,11 @@ function createBikeExplosion(position?: THREE.Vector3, enableCameraShake: boolea
         shakeCamera();
     }
     
-    console.log("Bike explosion created at", explosionPosition);
 }
 
 // Function to damage bike
 function damageBike(damage: number): void {
     bikeHealth = Math.max(0, bikeHealth - damage);
-    console.log(`Bike took ${damage} damage. Health: ${bikeHealth}/${bikeMaxHealth}`);
     
     // Visual feedback for bike damage
     if (bikeModel) {
@@ -240,7 +254,6 @@ function damageBike(damage: number): void {
     
     // If bike is destroyed
     if (bikeHealth <= 0) {
-        console.log("Bike destroyed!");
         
         // Create explosion effect
         createBikeExplosion();
@@ -282,7 +295,10 @@ function damageBike(damage: number): void {
                 } as GameEventBikeExplodedData
             });
             
-            sendGameEvent({ type: 'i_was_defeated' });
+            sendGameEventToOtherPlayers({ 
+                type: 'i_was_defeated',
+                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
+            });
         }
         
         // Show death message
@@ -701,6 +717,12 @@ function updateLegacyVariables() {
 function startGameFromRequest() {
     if (gameMode !== 'multiplayer') return;
     
+    // Clean up any legacy players before starting
+    if (connectedPlayers.has('opponent')) {
+        connectedPlayers.delete('opponent');
+        removeRemotePlayerMeshes('opponent');
+    }
+    
     // Hide multiplayer UI elements
     if (signalingPanel) signalingPanel.style.display = 'none';
     if (playerCountDisplay) playerCountDisplay.style.display = 'none';
@@ -727,12 +749,9 @@ function startGameFromRequest() {
 // Update UI to show connected player count
 function updatePlayerCountDisplay() {
     const connectedCount = getConnectedPlayerIds().length;
-    console.log(`[UI Update] Connected count: ${connectedCount}, Game mode: ${gameMode}`);
-    console.log(`[UI Update] Connected player IDs:`, getConnectedPlayerIds());
     
     if (playerCountSpan) {
         playerCountSpan.textContent = connectedCount.toString();
-        console.log(`[UI Update] Updated player count span to: ${connectedCount}`);
     } else {
         console.warn('[UI Update] playerCountSpan element not found');
     }
@@ -740,12 +759,10 @@ function updatePlayerCountDisplay() {
     // Show/hide the display based on multiplayer mode and connections
     if (playerCountDisplay && gameMode === 'multiplayer') {
         playerCountDisplay.style.display = connectedCount > 0 ? 'block' : 'none';
-        console.log(`[UI Update] Player count display set to: ${connectedCount > 0 ? 'block' : 'none'}`);
         
         // Show start game button if there are connected players
         if (startGameRequestBtn) {
             startGameRequestBtn.style.display = connectedCount > 0 ? 'block' : 'none';
-            console.log(`[UI Update] Start game button set to: ${connectedCount > 0 ? 'block' : 'none'}`);
         } else {
             console.warn('[UI Update] startGameRequestBtn element not found');
         }
@@ -757,7 +774,6 @@ function updatePlayerCountDisplay() {
             } else {
                 p2pInstructionText.textContent = "Use P2P controls below to connect, then click to start.";
             }
-            console.log(`[UI Update] Instruction text updated`);
         } else {
             console.warn('[UI Update] p2pInstructionText element not found');
         }
@@ -765,13 +781,10 @@ function updatePlayerCountDisplay() {
         // Hide multiplayer UI in single player mode
         if (playerCountDisplay) playerCountDisplay.style.display = 'none';
         if (startGameRequestBtn) startGameRequestBtn.style.display = 'none';
-        console.log(`[UI Update] Multiplayer UI hidden (gameMode: ${gameMode})`);
     }
     
     // Force UI refresh and provide manual start option
     if (connectedCount >= 2) {
-        console.log(`[UI Update] 🎮 READY TO PLAY! ${connectedCount} players connected`);
-        console.log(`[UI Update] Use console command: startGameFromRequest() to start manually`);
     }
 }
 
@@ -803,9 +816,15 @@ function generateRandomSpawnPosition(): THREE.Vector3 {
     const scale = getMapScale();
     const maxRange = scale * 0.8; // Use 80% of map scale as spawnable area
     
+    // Create a unique PRNG for this specific spawn calculation using current time + client ID
+    const uniqueSeed = (currentMapSeed || Date.now()) + 
+                      (clientId ? clientId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) : 0) + 
+                      performance.now();
+    const uniqueSpawnPrng = new PRNG(uniqueSeed);
+    
     // Generate random X and Z coordinates within the map bounds
-    const x = spawnPrng.randFloat(-maxRange, maxRange);
-    const z = spawnPrng.randFloat(-maxRange, maxRange);
+    const x = uniqueSpawnPrng.randFloat(-maxRange, maxRange);
+    const z = uniqueSpawnPrng.randFloat(-maxRange, maxRange);
     
     return new THREE.Vector3(x, PLAYER_HEIGHT, z);
 }
@@ -993,8 +1012,11 @@ function explodeBike(speedKmh: number): void {
         // Handle multiplayer death event
         if (gameMode === 'multiplayer') {
             myDeaths++;
-            sendGameEvent({ type: 'i_was_defeated' });
-            updateLegacyScores();
+            sendGameEventToOtherPlayers({ 
+                type: 'i_was_defeated',
+                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
+            });
+            
             
             if (checkDefeatCondition()) {
                 handleGameOver(false);
@@ -1191,14 +1213,7 @@ function checkDefeatCondition(): boolean {
     return myDeaths >= DEATHS_TO_LOSE;
 }
 
-// Legacy compatibility functions
-function updateLegacyScores() {
-    const primaryOpponent = getPrimaryOpponentId();
-    if (primaryOpponent) {
-        opponentScore = getPlayerDeaths(primaryOpponent);
-        myScore = myDeaths; // In legacy mode, "my score" is actually opponent deaths
-    }
-}
+
 
 
 interface PlayerState {
@@ -1221,6 +1236,7 @@ interface GameEventShootData {
 interface GameEventHitOpponentData {
     damageDealt: number;
     isHeadshot?: boolean;
+    fromPlayerId?: string; // ID of the player who dealt the damage
 }
 
 interface GameEventGameOverData {
@@ -1244,9 +1260,13 @@ interface GameEventStartGameRequestData {
     requesterId: string;
 }
 
+interface GameEventDefeatedData {
+    defeatedPlayerId: string;
+}
+
 interface GameEvent {
   type: 'shoot' | 'hit_opponent' | 'i_was_defeated' | 'game_over_notif' | 'map_seed' | 'bike_hit' | 'bike_exploded' | 'start_game_request';
-  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | GameEventBikeHitData | GameEventBikeExplodedData | GameEventStartGameRequestData | any;
+  data?: GameEventShootData | GameEventHitOpponentData | GameEventGameOverData | GameEventMapSeedData | GameEventBikeHitData | GameEventBikeExplodedData | GameEventStartGameRequestData | GameEventDefeatedData | any;
 }
 
 /**
@@ -1445,16 +1465,16 @@ function connectToSignalingServer(): Promise<void> {
 }
 
 function handleSignalingMessage(message: any) {
-    console.log('Received signaling message:', message);
+    
     
     switch (message.msg_type) {
         case 'welcome':
             clientId = message.data.client_id;
-            console.log('Assigned client ID:', clientId);
+        
             break;
             
         case 'room-joined':
-            console.log('Successfully joined room:', message.data);
+            
             currentRoom = message.data.room_id;
             const roomPlayers = message.data.players;
             const playerCount = message.data.player_count;
@@ -1498,7 +1518,7 @@ function handleSignalingMessage(message: any) {
             break;
             
         case 'user-left':
-            console.log('User left room:', message.data);
+            
             const leftUserId = message.data.user_id;
             
             // Clean up P2P connection for the departed player
@@ -1641,7 +1661,7 @@ async function initPeerConnectionForPlayer(playerId: string): Promise<RTCPeerCon
     
     // Handle incoming data channels
     connection.ondatachannel = (event) => {
-        console.log('Received data channel from:', playerId);
+        
         const receivedChannel = event.channel;
         setupDataChannelForPlayer(receivedChannel, playerId);
         dataChannels.set(playerId, receivedChannel);
@@ -1716,12 +1736,63 @@ function sendSignalingMessage(messageType: string, data: any, targetPlayer: stri
     };
     
     signalingSocket.send(JSON.stringify(message));
-    console.log('Sent signaling message:', messageType, 'to:', targetPlayer);
+    
+}
+
+// Create 3D text label for player ID
+function createPlayerIdLabel(playerId: string): THREE.Mesh {
+    const shortId = playerId.substring(0, 8);
+    
+    // Create canvas for text
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.width = 256;
+    canvas.height = 64;
+    
+    // Draw text on canvas
+    context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'white';
+    context.font = 'bold 24px Arial';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(shortId, canvas.width / 2, canvas.height / 2);
+    
+    // Create texture from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    // Create material and geometry
+    const material = new THREE.MeshBasicMaterial({ 
+        map: texture, 
+        transparent: true,
+        alphaTest: 0.1,
+        side: THREE.DoubleSide
+    });
+    const geometry = new THREE.PlaneGeometry(1, 0.25);
+    
+    const labelMesh = new THREE.Mesh(geometry, material);
+    labelMesh.name = `playerIdLabel_${playerId}`;
+    
+    // Make label always face camera
+    labelMesh.lookAt(camera.position);
+    
+    return labelMesh;
+}
+
+// Update all player ID labels to face the camera
+function updatePlayerIdLabels(): void {
+    if (!camera) return;
+    
+    scene.traverse((child) => {
+        if (child.name && child.name.startsWith('playerIdLabel_')) {
+            child.lookAt(camera.position);
+        }
+    });
 }
 
 // Create remote player meshes for a specific player
 function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
-    console.log('Creating remote player meshes for:', playerId);
     
     const remotePlayerMaterial = new THREE.MeshStandardMaterial({ 
         color: 0xff4500, 
@@ -1780,6 +1851,11 @@ function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
     smgMesh.visible = false;
     mainMesh.add(smgMesh);
 
+    // Add player ID label above the player
+    const playerIdLabel = createPlayerIdLabel(playerId);
+    playerIdLabel.position.set(0, REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y + REMOTE_PLAYER_HEAD_RADIUS * 2 + 0.5, 0);
+    mainMesh.add(playerIdLabel);
+
     scene.add(mainMesh);
 
     const meshes: RemotePlayerMeshes = {
@@ -1799,7 +1875,6 @@ function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
 
 // Remove remote player meshes for a specific player
 function removeRemotePlayerMeshes(playerId: string) {
-    console.log('Removing remote player meshes for:', playerId);
     
     const meshes = remotePlayerMeshes.get(playerId);
     if (meshes) {
@@ -1900,19 +1975,14 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
     if (!meshes) return;
     
     if (state.isOnBike) {
-        console.log(`🏍️ [${playerId}] Player on bike:`, {
-            bikePosition: state.bikePosition,
-            playerPosition: state.position,
-            bikeDirection: state.bikeDirection,
-            bikeBankAngle: state.bikeBankAngle
-        });
+
         
         // Create bike model if it doesn't exist
         if (!meshes.bikeModel) {
             meshes.bikeModel = createBikeModel();
             meshes.bikeModel.name = `remoteBike_${playerId}`;
             scene.add(meshes.bikeModel);
-            console.log("Created remote bike model for:", playerId);
+            
         }
         
         // Use bike position if available, otherwise fall back to player position
@@ -1930,7 +2000,6 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
         
         // Position bike
         meshes.bikeModel.position.set(bikePos.x, bikeY, bikePos.z);
-        console.log(`🏍️ [${playerId}] Bike positioned at:`, meshes.bikeModel.position);
         
         // Set bike rotation
         if (typeof state.bikeDirection === 'number') {
@@ -1962,22 +2031,20 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
         // Ensure player is upright relative to bike
         meshes.mainMesh.rotation.x = 0; // Keep player torso upright
         
-        console.log(`🔄 [${playerId}] Rotations - Bike Y: ${meshes.bikeModel.rotation.y}, Player Y: ${meshes.mainMesh.rotation.y}`);
         
-        console.log(`👤 [${playerId}] Player positioned at:`, meshes.mainMesh.position);
         
         // Show both bike and player
         meshes.bikeModel.visible = true;
         meshes.mainMesh.visible = true; // Keep player visible on bike
         
-        console.log(`✅ [${playerId}] Bike and player both visible`);
+       
     } else {
         // Hide bike when not in use
         if (meshes.bikeModel) {
             meshes.bikeModel.visible = false;
         }
         meshes.mainMesh.visible = true; // Show player model
-        console.log(`🚶 [${playerId}] Player walking, bike hidden`);
+        
     }
 }
 
@@ -2030,12 +2097,7 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
         hitOverlay.style.position = 'absolute'; hitOverlay.style.top = '0'; hitOverlay.style.left = '0';
         hitOverlay.style.width = '100%'; hitOverlay.style.height = '100%';
         
-        // Different visual feedback for headshots
-        if (hitData.isHeadshot) {
-            hitOverlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Yellow for headshot
-        } else {
-            hitOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)'; // Red for body shot
-        }
+        
         
         hitOverlay.style.zIndex = '1000';
         document.body.appendChild(hitOverlay);
@@ -2049,8 +2111,12 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
 
         if (currentHealth <= 0) {
             myDeaths++;
-            sendGameEventToAllPlayers({ type: 'i_was_defeated' });
-            updateLegacyScores();
+            // Send defeat notification to other players with my player ID
+            sendGameEventToOtherPlayers({ 
+                type: 'i_was_defeated',
+                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
+            });
+            
             
             if (checkDefeatCondition()) {
                 handleGameOver(false);
@@ -2064,12 +2130,11 @@ function handleRemoteGameEvent(gameEvent: GameEvent) {
     }
     else if (gameEvent.type === 'i_was_defeated') {
         if(isGameOver) return;
-        // Another player was defeated - need to figure out which one
-        // For now, increment the primary opponent's deaths for backward compatibility
-        const primaryOpponentId = getPrimaryOpponentId();
-        if (primaryOpponentId) {
-            incrementPlayerDeaths(primaryOpponentId);
-            updateLegacyScores();
+        // A player was defeated - get the specific player ID
+        const defeatedData = gameEvent.data as GameEventDefeatedData;
+        if (defeatedData && defeatedData.defeatedPlayerId) {
+            incrementPlayerDeaths(defeatedData.defeatedPlayerId);
+            
             
             if (checkVictoryCondition()) {
                 handleGameOver(true);
@@ -2116,14 +2181,13 @@ function handleDataChannelMessage(message: any, senderId: string) {
         const meshes = remotePlayerMeshes.get(senderId)!;
         
         // Adjust remote player position for terrain height
-        let adjustedY = state.position.y;
+        let adjustedY = state.position.y - PLAYER_HEIGHT;
         if (currentMapType === MapType.MOUNTAIN) {
             const terrainHeight = getTerrainHeightAt(state.position.x, state.position.z);
             // Ensure player is at least at terrain height
-            adjustedY = Math.max(adjustedY, terrainHeight + PLAYER_HEIGHT);
+            adjustedY = Math.max(adjustedY, terrainHeight);
         }
 
-        console.log(`🔧 [${senderId}] Height adjustment - Original: ${state.position.y}, Adjusted: ${adjustedY}, Terrain: ${currentMapType === MapType.MOUNTAIN ? getTerrainHeightAt(state.position.x, state.position.z) : 'N/A'}`);
         
         meshes.mainMesh.position.set(state.position.x, adjustedY, state.position.z);
         meshes.mainMesh.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
@@ -2171,44 +2235,7 @@ async function startAutomaticPeerConnection(shouldCreateOffer: boolean, targetOp
     }
 }
 
-async function createAutomaticOffer() {
-    console.log('createAutomaticOffer called, peerConnection:', peerConnection);
-    if (!peerConnection) {
-        console.error('Peer connection not initialized');
-        return;
-    }
-    
-    try {
-        // Create data channel for game communication
-        console.log("Creating data channel 'gameData'.");
-        dataChannel = peerConnection.createDataChannel("gameData");
-        
-        // Add to multiplayer system
-        const primaryOpponentId = 'opponent';
-        dataChannels.set(primaryOpponentId, dataChannel);
-        // Note: Don't call updateLegacyVariables() here as it might reset peerConnection
-        
-        setupDataChannelEvents();
-        
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        
-        // Send offer through signaling server
-        if (signalingSocket && currentRoom) {
-            const offerMessage = {
-                msg_type: 'offer',
-                data: offer,
-                target: opponentClientId, // Target specific opponent
-                sender: clientId
-            };
-            signalingSocket.send(JSON.stringify(offerMessage));
-            console.log('Sent automatic offer to', opponentClientId);
-        }
-        
-    } catch (error) {
-        console.error('Error creating automatic offer:', error);
-    }
-}
+
 
 async function handleRemoteOffer(offer: RTCSessionDescriptionInit, senderId: string) {
     console.log('Received offer from:', senderId);
@@ -2325,6 +2352,21 @@ function initializeApp() {
   startGameRequestBtn.addEventListener('click', () => {
     const connectedCount = getConnectedPlayerIds().length;
     if (connectedCount > 0 && gameMode === 'multiplayer') {
+      // Generate map seed and initialize PRNG
+      currentMapSeed = Date.now();
+      currentMapType = determineMapType(currentMapSeed, selectedMapType);
+      prng = new PRNG(currentMapSeed);
+      spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset());
+      
+      console.log(`Game initiator: Generated seed=${currentMapSeed}, type=${currentMapType}`);
+      
+      // Send map seed to all connected players
+      const mapSeedEvent: GameEvent = {
+        type: 'map_seed',
+        data: { seed: currentMapSeed, mapType: currentMapType } as GameEventMapSeedData
+      };
+      sendGameEventToAllPlayers(mapSeedEvent);
+      
       // Send start game request to all connected players
       const startGameEvent: GameEvent = {
         type: 'start_game_request',
@@ -2332,8 +2374,9 @@ function initializeApp() {
       };
       sendGameEventToAllPlayers(startGameEvent);
       
-      // Start the game locally
+      // Start the game locally and initialize map
       startGameFromRequest();
+      resetGameScene();
       
       showTemporaryMessage(`Game starting! Sent request to ${connectedCount} player(s).`, 2000);
     } else {
@@ -2558,6 +2601,13 @@ function resetGameScene() {
     playerDeaths.clear();
     lastFireTime = 0;
     isFiringSMGActual = false;
+    
+    // Clean up legacy opponent ID that might remain from previous sessions
+    if (connectedPlayers.has('opponent')) {
+        console.log('Removing legacy opponent ID from connected players');
+        connectedPlayers.delete('opponent');
+        removeRemotePlayerMeshes('opponent');
+    }
 
 
     if (gameMode === 'singleplayer') {
@@ -2780,7 +2830,7 @@ function createBikeModel(): THREE.Group {
     
     // Use improved fallback model only for now
     createFallbackBikeModel(bikeGrp);
-    console.log('Using fallback bike model');
+    
     
     return bikeGrp;
 }
@@ -2807,11 +2857,11 @@ function recreateBikeModel(): void {
     bikeModel = createBikeModel();
     bikeModel.visible = false;
     scene.add(bikeModel);
-    console.log('Bike model recreated');
+    
 }
 
 function createFallbackBikeModel(bikeGrp: THREE.Group): void {
-    console.log('Creating enhanced fallback bike model');
+    
     
     // Materials
     const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x0066cc, metalness: 0.8, roughness: 0.2 }); // Blue frame
@@ -2903,7 +2953,6 @@ function createFallbackBikeModel(bikeGrp: THREE.Group): void {
     
     // No rotation needed - bike faces correct direction by default
     
-    console.log('Enhanced fallback bike model created with', bikeGrp.children.length, 'parts');
 }
 
 function createSniperRifleModel(): {model: THREE.Group, muzzlePoint: THREE.Object3D} {
@@ -3257,7 +3306,6 @@ function adjustZeroing(adjustment: number) {
 
 function toggleBike() {
     if (!controls || !controls.isLocked || isGameOver) {
-        console.log("Cannot toggle bike: controls not ready or game over");
         return;
     }
     
@@ -3288,7 +3336,6 @@ function toggleBike() {
             equipWeapon('handgun');
         }
         
-        console.log("Bike mode ON - Position:", bikePosition, "Direction:", bikeDirection);
         showTemporaryMessage("Bike ON - W/S: Accelerate/Brake, A/D: Turn", 3000);
     } else {
         // Hide bike model
@@ -3296,7 +3343,6 @@ function toggleBike() {
             bikeModel.visible = false;
         }
         
-        console.log("Bike mode OFF");
         
         // Reset bike state when getting off
         bikeSpeed = 0;
@@ -3382,19 +3428,15 @@ function initThreeJSGame() {
       const yawObjectFallback = controls.getObject();
       if (yawObjectFallback && yawObjectFallback.children && yawObjectFallback.children.length > 0 && yawObjectFallback.children[0] instanceof THREE.Object3D) {
           pitchObject = yawObjectFallback.children[0] as THREE.Object3D;
-          console.log("Used fallback (controls.getObject().children[0]) for pitchObject.");
       } else {
-          console.error("CRITICAL: Both methods to get pitchObject failed. Camera recoil and aiming will be affected.");
           // Create a fallback pitch object as last resort
           pitchObject = new THREE.Object3D();
           pitchObject.add(camera);
           controls.getObject().add(pitchObject);
-          console.log("Created fallback pitchObject and added camera to it.");
       }
     }
     
     if (pitchObject) {
-      console.log("Successfully initialized pitchObject");
     }
   }, 0);
 
@@ -3867,23 +3909,18 @@ function generateMountainMap() {
         return;
     }
 
-    console.log("Loading terrain assets...");
     
     // First, try to load via fetch to check if file exists
     const fbxPath = '/assets/89-terrain/uploads_files_2708212_terrain.fbx';
-    console.log("Attempting to load FBX from:", fbxPath);
     
     fetch(fbxPath, { method: 'HEAD' })
         .then(response => {
-            console.log("FBX file accessibility check:", response.status, response.statusText);
             if (!response.ok) {
                 throw new Error(`File not accessible: ${response.status}`);
             }
             return loadFBXTerrain(fbxPath);
         })
         .catch(error => {
-            console.error('FBX file not accessible:', error);
-            console.log('Falling back to procedural mountain generation...');
             generateProceduralMountainMap();
         });
 }
@@ -3895,15 +3932,10 @@ function loadFBXTerrain(fbxPath: string) {
     fbxLoader.load(
         fbxPath,
         (terrainModel) => {
-            console.log("Terrain FBX loaded successfully");
-            console.log("Terrain model:", terrainModel);
-            console.log("Terrain children count:", terrainModel.children.length);
             
             // Debug: Log all children in the model
             terrainModel.traverse((child: any) => {
-                console.log("Child type:", child.type, "Name:", child.name);
                 if (child.geometry) {
-                    console.log("  Geometry vertices:", child.geometry.attributes.position?.count || 0);
                 }
             });
             
@@ -3919,7 +3951,6 @@ function loadFBXTerrain(fbxPath: string) {
             terrainModel.traverse((child: any) => {
                 if (child instanceof THREE.Mesh) {
                     meshCount++;
-                    console.log(`Processing mesh ${meshCount}:`, child.name);
                     if (child.material) {
                         // Dispose old material to prevent memory leaks
                         if (Array.isArray(child.material)) {
@@ -3934,7 +3965,6 @@ function loadFBXTerrain(fbxPath: string) {
                 }
             });
 
-            console.log(`Found and processed ${meshCount} meshes in terrain model`);
 
             // Use the terrain as-is, just scale appropriately for gameplay
             // Scale to fit the game's coordinate system (similar to other maps)
@@ -3957,27 +3987,17 @@ function loadFBXTerrain(fbxPath: string) {
                 }
             });
             
-            console.log(`Generated mountain map using original terrain asset`);
-            console.log("Terrain model position:", terrainModel.position);
-            console.log("Terrain model scale:", terrainModel.scale);
-            console.log("Terrain model bounds:", terrainModel);
             
             // Trigger respawn after terrain is loaded to ensure proper height calculation
             if (controls && scene) {
-                console.log("Terrain loaded - triggering respawn to adjust height");
                 setTimeout(() => {
                     triggerRespawn();
                 }, 100); // Small delay to ensure terrain is fully processed
             }
         },
-        (progress) => {
-            console.log('Terrain loading progress:', (progress.loaded / progress.total * 100) + '%');
-        },
+       
         (error) => {
-            console.error('Error loading terrain FBX:', error);
-            console.error('Error details:', error.message || error);
-            console.log('FBX file path attempted:', '/assets/89-terrain/uploads_files_2708212_terrain.fbx');
-            console.log('Falling back to procedural mountain generation...');
+            
             // Fallback to procedural generation if asset loading fails
             generateProceduralMountainMap();
         }
@@ -4662,7 +4682,7 @@ function setupDataChannelEvents() {
                         remotePlayerBikeModel = createBikeModel();
                         remotePlayerBikeModel.name = "remoteBike";
                         scene.add(remotePlayerBikeModel);
-                        console.log("Created remote bike model");
+                        
                     }
                     
                     // Use bike position if available, otherwise fall back to player position
@@ -4702,7 +4722,6 @@ function setupDataChannelEvents() {
                         remotePlayerMesh.rotation.z = state.bikeBankAngle * 0.3; // Reduced banking effect
                     }
                     
-                    console.log("Updated remote bike position:", remotePlayerBikeModel.position);
                 } else {
                     // Hide remote bike when not in bike mode
                     if (remotePlayerBikeModel) {
@@ -4764,14 +4783,6 @@ function setupDataChannelEvents() {
                     const hitOverlay = document.createElement('div');
                     hitOverlay.style.position = 'absolute'; hitOverlay.style.top = '0'; hitOverlay.style.left = '0';
                     hitOverlay.style.width = '100%'; hitOverlay.style.height = '100%';
-                    
-                    // Different visual feedback for headshots
-                    if (hitData.isHeadshot) {
-                        hitOverlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Yellow for headshot
-                    } else {
-                        hitOverlay.style.backgroundColor = 'rgba(255, 0, 0, 0.3)'; // Red for body shot
-                    }
-                    
                     hitOverlay.style.zIndex = '1000';
                     document.body.appendChild(hitOverlay);
                     setTimeout(() => { if (document.body.contains(hitOverlay)) document.body.removeChild(hitOverlay); }, 150);
@@ -4786,8 +4797,11 @@ function setupDataChannelEvents() {
                     
                     if (currentHealth <= 0) {
                         myDeaths++;
-                        sendGameEvent({ type: 'i_was_defeated' });
-                        updateLegacyScores();
+                        sendGameEventToOtherPlayers({ 
+                type: 'i_was_defeated',
+                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
+            });
+                        
                         
                         if (checkDefeatCondition()) {
                             handleGameOver(false); 
@@ -4803,7 +4817,7 @@ function setupDataChannelEvents() {
                     const primaryOpponent = getPrimaryOpponentId();
                     if (primaryOpponent) {
                         const opponentDeaths = incrementPlayerDeaths(primaryOpponent);
-                        updateLegacyScores();
+                        
                         showTemporaryMessage(`Opponent Defeated! (${opponentDeaths}/${DEATHS_TO_LOSE} deaths)`, 2000);
                         
                         if (checkVictoryCondition()) {
@@ -5058,16 +5072,6 @@ function sendPlayerState() {
             bikePosition: isOnBike ? { x: bikePosition.x, y: bikePosition.y, z: bikePosition.z } : undefined,
         };
         
-        // Debug log for bike mode
-        if (isOnBike) {
-            console.log("Sending bike state:", {
-                isOnBike: state.isOnBike,
-                bikePosition: state.bikePosition,
-                bikeDirection: state.bikeDirection,
-                bikeBankAngle: state.bikeBankAngle
-            });
-        }
-        
         // Send to ALL connected players (new multiplayer system)
         const connectedIds = getConnectedPlayerIds();
         let sentCount = 0;
@@ -5094,12 +5098,7 @@ function sendPlayerState() {
             }
         }
         
-        // Debug output for troubleshooting
-        if (sentCount > 0) {
-            console.log(`📡 Sent player state to ${sentCount} players:`, connectedIds);
-        } else {
-            console.warn("⚠️ Failed to send player state to any players");
-        }
+        
     }
 }
 
@@ -5108,6 +5107,15 @@ function sendGameEventToAllPlayers(event: GameEvent) {
     const connectedIds = getConnectedPlayerIds();
     for (const playerId of connectedIds) {
         sendGameEventToPlayer(playerId, event);
+    }
+}
+
+function sendGameEventToOtherPlayers(event: GameEvent) {
+    const connectedIds = getConnectedPlayerIds();
+    for (const playerId of connectedIds) {
+        if (playerId !== clientId) {
+            sendGameEventToPlayer(playerId, event);
+        }
     }
 }
 
@@ -5374,6 +5382,9 @@ function updateHealthDisplay(): void {
   
   if (!healthContainer || !healthFill || !healthText || !speedText) return;
   
+  // Update player ID display
+  updatePlayerIdDisplay();
+  
   // Show health bar during gameplay
   if (controls && controls.isLocked && !isGameOver) {
     healthContainer.style.display = 'block';
@@ -5418,6 +5429,48 @@ function updateHealthDisplay(): void {
   }
 }
 
+function updatePlayerIdDisplay(): void {
+  // Create or update player ID display
+  let playerIdContainer = document.getElementById('player-id-container');
+  if (!playerIdContainer) {
+    playerIdContainer = document.createElement('div');
+    playerIdContainer.id = 'player-id-container';
+    playerIdContainer.style.position = 'absolute';
+    playerIdContainer.style.top = '80px';
+    playerIdContainer.style.left = '20px';
+    playerIdContainer.style.color = 'white';
+    playerIdContainer.style.fontFamily = 'monospace';
+    playerIdContainer.style.fontSize = '14px';
+    playerIdContainer.style.background = 'rgba(0, 0, 0, 0.7)';
+    playerIdContainer.style.padding = '10px';
+    playerIdContainer.style.borderRadius = '5px';
+    playerIdContainer.style.zIndex = '1000';
+    playerIdContainer.style.pointerEvents = 'none';
+    document.body.appendChild(playerIdContainer);
+  }
+  
+  // Show during gameplay only
+  if (controls && controls.isLocked && !isGameOver) {
+    playerIdContainer.style.display = 'block';
+    
+    // Update content
+    const myId = clientId ? clientId.substring(0, 8) : 'Unknown';
+    const connectedIds = getConnectedPlayerIds();
+    
+    let content = `My ID: ${myId}\n`;
+    content += `Connected Players: ${connectedIds.length}\n`;
+    
+    connectedIds.forEach((id, index) => {
+      const shortId = id.substring(0, 8);
+      content += `Player ${index + 1}: ${shortId}\n`;
+    });
+    
+    playerIdContainer.textContent = content;
+  } else {
+    playerIdContainer.style.display = 'none';
+  }
+}
+
 function updateHealthRegeneration(deltaTime: number): void {
   const currentTime = performance.now();
   const timeSinceLastDamage = currentTime - lastDamageTime;
@@ -5445,9 +5498,12 @@ function updateHealthRegeneration(deltaTime: number): void {
           // In multiplayer, this counts as a death
           myDeaths++;
           if (dataChannel && dataChannel.readyState === 'open') {
-            sendGameEvent({ type: 'i_was_defeated' });
+            sendGameEventToOtherPlayers({ 
+                type: 'i_was_defeated',
+                data: { defeatedPlayerId: clientId || 'unknown' } as GameEventDefeatedData
+            });
           }
-          updateLegacyScores();
+          
           
           if (checkDefeatCondition()) {
             handleGameOver(false); 
@@ -5806,82 +5862,70 @@ function updateProjectiles(delta: number) {
         }
     }
 
-    if (!hitSomething && gameMode === 'multiplayer' && remotePlayerMesh && remotePlayerMesh.parent) { 
+    if (!hitSomething && gameMode === 'multiplayer') { 
         let isHeadshot = false;
         let hitSomethingThisFrame = false;
         let hitPlayerId: string | null = null;
         
-        // First, check specifically for headshot by testing individual body parts
-        // Get head mesh specifically (should be the first child with sphere geometry)
-        let headMesh: THREE.Mesh | null = null;
-        remotePlayerMesh.traverse((child) => {
-            if (child instanceof THREE.Mesh && child.geometry instanceof THREE.SphereGeometry) {
-                headMesh = child;
-            }
-        });
-        
-        if (headMesh) {
-            // Create bounding box for head only with slight expansion
-            const headBoundingBox = new THREE.Box3().setFromObject(headMesh);
-            const expandedHeadBox = headBoundingBox.clone().expandByScalar(PLAYER_RADIUS * 0.8); // Smaller expansion for head
+        // Check collision with all remote players (both headshots and body hits)
+        for (const [playerId, meshes] of remotePlayerMeshes) {
+            if (!meshes.mainMesh.visible || hitSomethingThisFrame) continue; // Skip invisible players or if already hit something
             
-            // Check ray intersection with head first
-            if (projectileSegmentLength >= 0.0001) {
-                const hitHeadPoint = _projectileCollisionRay.intersectBox(expandedHeadBox, _projectileIntersectionPoint);
-                if (hitHeadPoint && oldPosition.distanceTo(hitHeadPoint) <= projectileSegmentLength) {
-                    isHeadshot = true;
-                    hitSomethingThisFrame = true;
+            // First, check specifically for headshot by testing head mesh
+            let headMesh: THREE.Mesh | null = null;
+            meshes.mainMesh.traverse((child) => {
+                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.SphereGeometry) {
+                    headMesh = child;
                 }
-            }
+            });
             
-            // Check if projectile position is inside head box
-            if (!hitSomethingThisFrame && expandedHeadBox.containsPoint(p.mesh.position)) {
-                isHeadshot = true;
-                hitSomethingThisFrame = true;
-            }
-        }
-        
-        // If no headshot, check for general body hit with all remote players
-        if (!hitSomethingThisFrame) {
-            // Check collision with all remote players
-            for (const [playerId, meshes] of remotePlayerMeshes) {
-                if (meshes.mainMesh.visible) { // Only check visible players (not on bikes)
-                    const remotePlayerBoundingBox = new THREE.Box3().setFromObject(meshes.mainMesh);
-                    const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
-                    
-                    if (projectileSegmentLength >= 0.0001) {
-                        const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
-                        if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
-                            hitSomethingThisFrame = true;
-                            hitPlayerId = playerId; // Track which player was hit
-                            break;
-                        }
-                    }
-                    
-                    if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
+            if (headMesh) {
+                // Create bounding box for head only with slight expansion
+                const headBoundingBox = new THREE.Box3().setFromObject(headMesh);
+                const expandedHeadBox = headBoundingBox.clone().expandByScalar(PLAYER_RADIUS * 0.8); // Smaller expansion for head
+                
+                // Check ray intersection with head first
+                if (projectileSegmentLength >= 0.0001) {
+                    const hitHeadPoint = _projectileCollisionRay.intersectBox(expandedHeadBox, _projectileIntersectionPoint);
+                    if (hitHeadPoint && oldPosition.distanceTo(hitHeadPoint) <= projectileSegmentLength) {
+                        isHeadshot = true;
                         hitSomethingThisFrame = true;
-                        hitPlayerId = playerId; // Track which player was hit
+                        hitPlayerId = playerId;
                         break;
                     }
                 }
+                
+                // Check if projectile position is inside head box
+                if (!hitSomethingThisFrame && expandedHeadBox.containsPoint(p.mesh.position)) {
+                    isHeadshot = true;
+                    hitSomethingThisFrame = true;
+                    hitPlayerId = playerId;
+                    break;
+                }
             }
+        
             
-            // Fallback to legacy system for backward compatibility
-            if (!hitSomethingThisFrame && remotePlayerMesh && remotePlayerMesh.visible) {
-                const remotePlayerBoundingBox = new THREE.Box3().setFromObject(remotePlayerMesh);
+            // If no headshot on this player, check for body hit on the same player
+            if (!hitSomethingThisFrame) {
+                const remotePlayerBoundingBox = new THREE.Box3().setFromObject(meshes.mainMesh);
                 const expandedRemotePlayerBox = remotePlayerBoundingBox.clone().expandByScalar(PLAYER_RADIUS); 
                 
                 if (projectileSegmentLength >= 0.0001) {
                     const hitBodyPoint = _projectileCollisionRay.intersectBox(expandedRemotePlayerBox, _projectileIntersectionPoint);
                     if (hitBodyPoint && oldPosition.distanceTo(hitBodyPoint) <= projectileSegmentLength) {
                         hitSomethingThisFrame = true;
+                        hitPlayerId = playerId; // Track which player was hit
                     }
                 }
                 
                 if (!hitSomethingThisFrame && expandedRemotePlayerBox.containsPoint(p.mesh.position)) {
                     hitSomethingThisFrame = true;
+                    hitPlayerId = playerId; // Track which player was hit
                 }
             }
+            
+            // If we hit this player, exit the loop
+            if (hitSomethingThisFrame) break;
         }
             
         if (hitSomethingThisFrame) {
@@ -5900,17 +5944,24 @@ function updateProjectiles(delta: number) {
                 );
                 
                 // Debug info for velocity-based damage
-                console.log(`Distance: ${p.distanceTraveled.toFixed(1)}m, Speed: ${projectileSpeed.toFixed(1)}/${initialSpeed}, Damage: ${finalDamage.toFixed(1)}`);
                 if (isHeadshot) {
                     finalDamage *= 5; // Double damage for headshots
                 }
-                sendGameEvent({ 
-                    type: 'hit_opponent', 
-                    data: { 
-                        damageDealt: finalDamage,
-                        isHeadshot: isHeadshot
-                    } as GameEventHitOpponentData 
-                });
+                // Send hit event only to the specific player that was hit
+                if (hitPlayerId) {
+                    sendGameEventToPlayer(hitPlayerId, { 
+                        type: 'hit_opponent', 
+                        data: { 
+                            damageDealt: finalDamage,
+                            isHeadshot: isHeadshot,
+                            fromPlayerId: clientId || 'unknown',
+                        } as GameEventHitOpponentData 
+                    });
+                console.log(`HitPlayerId: ${hitPlayerId}, Distance: ${p.distanceTraveled.toFixed(1)}m, Speed: ${projectileSpeed.toFixed(1)}/${initialSpeed}, Damage: ${finalDamage.toFixed(1)}`);
+
+                } else {
+                    console.warn('Hit detected but no hitPlayerId set');
+                }
             } 
             hitSomething = true;
             
@@ -6653,6 +6704,7 @@ function animate() {
   updateHealthDisplay();
   updateSpeedIndicator(); // Update bike speed indicator
   updateBikeDurabilityIndicator(); // Update bike durability indicator
+  updatePlayerIdLabels(); // Update player ID labels orientation
 
   renderer.render(scene, camera);
 }
