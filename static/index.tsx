@@ -5306,6 +5306,9 @@ function animate() {
   if (controls.isLocked) {
     processPendingInputs();
 
+    // Adjust mouse sensitivity based on scope zoom
+    controls.sensitivity = 0.002 * mouseSensitivity * getMouseSensitivityMultiplier();
+
     // SMG Full Auto Fire Logic
     if (isFiringSMGActual && currentEquippedWeapon === 'smg' && !isGameOver && prng) {
         const smgStats = weaponStatsDB.smg;
