@@ -363,6 +363,16 @@ interface Zombie {
   attackCooldown: number;
   isAlive: boolean;
   spawnTime: number;
+  // Animation state
+  isAttacking: boolean;
+  attackAnimationStart: number;
+  attackAnimationDuration: number;
+  originalArmPositions: { left: THREE.Vector3; right: THREE.Vector3 };
+  hasDealtDamage: boolean; // Track if damage was dealt in current attack
+  // Movement state
+  movementNoise: { x: number; z: number }; // Random movement variation
+  limping: boolean; // Whether zombie is limping
+  limpCycle: number; // Limping animation cycle
 }
 
 const zombies: Zombie[] = [];
@@ -855,83 +865,253 @@ function generateRandomSpawnPosition(): THREE.Vector3 {
 
 // Using fallback zombie models only - file loading removed
 
-function createFallbackZombieModel(): THREE.Group {
-  // Fallback to improved box geometry
+function createFallbackZombieModel(scale: number = 1.0, colorVariation: number = 0): { group: THREE.Group; leftArm: THREE.Mesh; rightArm: THREE.Mesh } {
+  // Fallback to improved box geometry with randomization
   const zombieGroup = new THREE.Group();
   
-  // Body
+  // Apply scale to zombie
+  zombieGroup.scale.set(scale, scale, scale);
+  
+  // Color variations for personality
+  const baseColors = {
+    body: 0x4a5d23,
+    head: 0x6b7c32,
+    arms: 0x5a6b28,
+    legs: 0x3d4a1f
+  };
+  
+  // Apply color variation (-0.3 to +0.3)
+  const variation = (colorVariation - 0.5) * 0.6;
+  const adjustColor = (color: number) => {
+    const r = Math.max(0, Math.min(1, ((color >> 16) & 0xff) / 255 + variation));
+    const g = Math.max(0, Math.min(1, ((color >> 8) & 0xff) / 255 + variation));
+    const b = Math.max(0, Math.min(1, (color & 0xff) / 255 + variation));
+    return (Math.floor(r * 255) << 16) | (Math.floor(g * 255) << 8) | Math.floor(b * 255);
+  };
+  
+  // All positions compensated for scaling - legs touch ground properly
+  const legY = 0.3 / scale - 2.5 + scale; // Half leg height above ground (0.6 leg height / 2)
+  const bodyY = (0.6 + 0.6) / scale - 2.5 + scale; // leg height + half body height
+  const headY = (0.6 + 1.2 + 0.2) / scale - 2.5 + scale; // leg height + body height + half head height
+  const armY = (0.6 + 0.6) / scale - 2.5 + scale; // leg height + half body height (arm center)
+
+  // Body - positioned above legs
   const bodyGeometry = new THREE.BoxGeometry(0.6, 1.2, 0.4);
-  const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0x4a5d23 });
+  const bodyMaterial = new THREE.MeshLambertMaterial({ color: adjustColor(baseColors.body) });
   const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-  bodyMesh.position.y = 0.6;
+  bodyMesh.position.y = bodyY;
   zombieGroup.add(bodyMesh);
   
-  // Head
+  // Head - positioned above body
   const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-  const headMaterial = new THREE.MeshLambertMaterial({ color: 0x6b7c32 });
+  const headMaterial = new THREE.MeshLambertMaterial({ color: adjustColor(baseColors.head) });
   const headMesh = new THREE.Mesh(headGeometry, headMaterial);
-  headMesh.position.y = 1.4;
+  headMesh.position.y = headY;
   zombieGroup.add(headMesh);
   
-  // Arms
+  // Arms - positioned at body center height
   const armGeometry = new THREE.BoxGeometry(0.2, 0.8, 0.2);
-  const armMaterial = new THREE.MeshLambertMaterial({ color: 0x5a6b28 });
+  const armMaterial = new THREE.MeshLambertMaterial({ color: adjustColor(baseColors.arms) });
   
   const leftArm = new THREE.Mesh(armGeometry, armMaterial);
-  leftArm.position.set(-0.5, 0.8, 0);
+  leftArm.position.set(-0.5, armY, 0);
   zombieGroup.add(leftArm);
   
   const rightArm = new THREE.Mesh(armGeometry, armMaterial);
-  rightArm.position.set(0.5, 0.8, 0);
+  rightArm.position.set(0.5, armY, 0);
   zombieGroup.add(rightArm);
   
-  // Legs
+  // Legs - positioned to touch ground (using already calculated legY)
   const legGeometry = new THREE.BoxGeometry(0.2, 0.6, 0.2);
-  const legMaterial = new THREE.MeshLambertMaterial({ color: 0x3d4a1f });
+  const legMaterial = new THREE.MeshLambertMaterial({ color: adjustColor(baseColors.legs) });
   
   const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
-  leftLeg.position.set(-0.2, 0.3, 0);
+  leftLeg.position.set(-0.2, legY, 0);
   zombieGroup.add(leftLeg);
   
   const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
-  rightLeg.position.set(0.2, 0.3, 0);
+  rightLeg.position.set(0.2, legY, 0);
   zombieGroup.add(rightLeg);
   
-  return zombieGroup;
+  return { group: zombieGroup, leftArm, rightArm };
 }
 
-// Load zombie model (fallback to box if no model available)
-function loadZombieModel(): Promise<THREE.Group> {
+// Load zombie model with randomization and time-based scaling
+function loadZombieModel(): Promise<{ group: THREE.Group; leftArm: THREE.Mesh; rightArm: THREE.Mesh }> {
   return new Promise((resolve) => {
-    // Always use fallback zombie model (manual creation)
-    console.log('Using manual fallback zombie model');
-    resolve(createFallbackZombieModel());
+    // Calculate time-based scaling (stronger zombies over time)
+    const timeSurvived = gameStartTime ? (performance.now() - gameStartTime) / 1000 : 0;
+    const timeScaling = 1.0 + Math.min(timeSurvived / 60, 1.0); // Up to 2x size after 1 minute
+    
+    // Random individual scaling (0.8x to 1.2x base size)
+    const randomScale = 0.8 + Math.random() * 0.4;
+    const finalScale = timeScaling * randomScale;
+    
+    // Random color variation (0 to 1)
+    const colorVariation = Math.random();
+    
+    console.log(`Creating zombie: TimeSurvived=${timeSurvived.toFixed(1)}s, TimeScaling=${timeScaling.toFixed(2)}x, FinalScale=${finalScale.toFixed(2)}`);
+    resolve(createFallbackZombieModel(finalScale, colorVariation));
   });
 }
 
 // Zombie management functions
 async function createZombie(position: THREE.Vector3): Promise<Zombie> {
-  const zombieModel = await loadZombieModel();
-  zombieModel.position.copy(position);
-  scene.add(zombieModel);
+  const zombieData = await loadZombieModel();
+  zombieData.group.position.copy(position);
+  scene.add(zombieData.group);
+  
+  // Calculate time-based stat scaling
+  const timeSurvived = gameStartTime ? (performance.now() - gameStartTime) / 1000 : 0;
+  const timeMultiplier = 1.0 + Math.min(timeSurvived / 60, 9.0); // Up to 10x stats after 60 seconds
+  
+  console.log(`Zombie Stats: TimeSurvived=${timeSurvived.toFixed(1)}s, TimeMultiplier=${timeMultiplier.toFixed(2)}x`);
+  
+  // Base stats with random variation (±20%)
+  const baseHealth = 50;
+  const baseSpeed = 2.0;
+  const baseAttackDamage = 15;
+  const baseAttackRange = 2.0;
+  const baseCooldown = 1500;
+  
+  // Apply randomization (0.8x to 1.2x)
+  const randomVariation = () => 0.8 + Math.random() * 0.4;
+  
+  const maxHealth = Math.floor(baseHealth * timeMultiplier * randomVariation());
+  const speed = baseSpeed * timeMultiplier * randomVariation();
+  const attackDamage = Math.floor(baseAttackDamage * timeMultiplier * randomVariation());
+  const attackRange = baseAttackRange * randomVariation();
+  const attackCooldown = Math.max(500, baseCooldown / (timeMultiplier * randomVariation())); // Faster attacks over time
   
   const zombie: Zombie = {
     id: Math.random().toString(36).substring(2, 9),
-    mesh: zombieModel as any, // Group can be treated as Mesh for our purposes
+    mesh: zombieData.group as any, // Group can be treated as Mesh for our purposes
     position: position.clone(),
     velocity: new THREE.Vector3(),
-    health: 500,
-    maxHealth: 50,
-    speed: 2.0,
-    attackRange: 2.0,
-    attackDamage: 15,
+    health: maxHealth,
+    maxHealth: maxHealth,
+    speed: speed,
+    attackRange: attackRange,
+    attackDamage: attackDamage,
     lastAttackTime: 0,
-    attackCooldown: 1500,
+    attackCooldown: attackCooldown,
     isAlive: true,
-    spawnTime: performance.now()
+    spawnTime: performance.now(),
+    // Animation state
+    isAttacking: false,
+    attackAnimationStart: 0,
+    attackAnimationDuration: 800, // 800ms attack animation for dramatic effect
+    originalArmPositions: {
+      left: zombieData.leftArm.position.clone(),
+      right: zombieData.rightArm.position.clone()
+    },
+    hasDealtDamage: false,
+    // Movement state
+    movementNoise: { x: Math.random() * 0.5 - 0.25, z: Math.random() * 0.5 - 0.25 },
+    limping: Math.random() < 0.7, // 70% chance of limping
+    limpCycle: Math.random() * Math.PI * 2
   };
   
+  // Store arm references for animation
+  (zombie.mesh as any).leftArm = zombieData.leftArm;
+  (zombie.mesh as any).rightArm = zombieData.rightArm;
+  
+  console.log(`Spawned zombie: HP=${maxHealth}, Speed=${speed.toFixed(1)}, Damage=${attackDamage}, Range=${attackRange.toFixed(1)}, Cooldown=${attackCooldown}ms, Scale=${zombieData.group.scale.x.toFixed(2)}x`);
+  
   return zombie;
+}
+
+// Attack animation functions
+function startZombieAttackAnimation(zombie: Zombie): void {
+  if (zombie.isAttacking) return;
+  
+  zombie.isAttacking = true;
+  zombie.attackAnimationStart = performance.now();
+  zombie.hasDealtDamage = false; // Reset damage flag
+  
+  console.log(`Zombie ${zombie.id} started attack animation`);
+}
+
+function updateZombieAttackAnimation(zombie: Zombie): boolean {
+  if (!zombie.isAttacking) return false;
+  
+  const elapsed = performance.now() - zombie.attackAnimationStart;
+  const progress = Math.min(elapsed / zombie.attackAnimationDuration, 1.0);
+  
+  // Check if we should deal damage (during strike phase and haven't dealt damage yet)
+  let shouldDealDamage = false;
+  if (progress >= 0.4 && progress <= 0.6 && !zombie.hasDealtDamage) {
+    shouldDealDamage = true;
+    zombie.hasDealtDamage = true;
+  }
+  
+  // Get arm references
+  const leftArm = (zombie.mesh as any).leftArm;
+  const rightArm = (zombie.mesh as any).rightArm;
+  
+  if (leftArm && rightArm) {
+    // Dynamic swinging motion - dramatic arc
+    // Phase 1 (0-0.3): Wind up - arms go back and up
+    // Phase 2 (0.3-0.7): Strike - arms swing forward dramatically
+    // Phase 3 (0.7-1.0): Follow through and return
+    
+    let swingX, swingY, swingZ;
+    
+    if (progress < 0.3) {
+      // Wind up phase
+      const windupProgress = progress / 0.3;
+      swingX = -windupProgress * 0.3; // Pull back
+      swingY = windupProgress * 0.4; // Lift up
+      swingZ = -windupProgress * 0.2; // Slight back
+    } else if (progress < 0.7) {
+      // Strike phase - dramatic forward swing
+      const strikeProgress = (progress - 0.3) / 0.4;
+      swingX = -0.3 + strikeProgress * 1.0; // Swing forward dramatically
+      swingY = 0.4 - strikeProgress * 0.6; // Swing down
+      swingZ = -0.2 + strikeProgress * 0.8; // Forward motion
+    } else {
+      // Follow through and return
+      const returnProgress = (progress - 0.7) / 0.3;
+      swingX = 0.7 - returnProgress * 0.7; // Return to center
+      swingY = -0.2 + returnProgress * 0.2; // Return to normal height
+      swingZ = 0.6 - returnProgress * 0.6; // Return to normal depth
+    }
+    
+    // Apply different motion to each arm for more dynamic effect
+    leftArm.position.x = zombie.originalArmPositions.left.x + swingX;
+    leftArm.position.y = zombie.originalArmPositions.left.y + swingY;
+    leftArm.position.z = zombie.originalArmPositions.left.z + swingZ;
+    
+    // Right arm with slight offset for asymmetry
+    rightArm.position.x = zombie.originalArmPositions.right.x + swingX * 0.8;
+    rightArm.position.y = zombie.originalArmPositions.right.y + swingY * 1.1;
+    rightArm.position.z = zombie.originalArmPositions.right.z + swingZ * 0.9;
+    
+    // Add rotation for more dramatic effect
+    if (leftArm.rotation && rightArm.rotation) {
+      const rotationAmount = Math.sin(progress * Math.PI) * 0.5;
+      leftArm.rotation.x = rotationAmount;
+      rightArm.rotation.x = rotationAmount;
+    }
+  }
+  
+  // End animation when complete
+  if (progress >= 1.0) {
+    zombie.isAttacking = false;
+    zombie.hasDealtDamage = false; // Reset for next attack
+    
+    // Reset arm positions and rotations
+    if (leftArm && rightArm) {
+      leftArm.position.copy(zombie.originalArmPositions.left);
+      rightArm.position.copy(zombie.originalArmPositions.right);
+      if (leftArm.rotation && rightArm.rotation) {
+        leftArm.rotation.x = 0;
+        rightArm.rotation.x = 0;
+      }
+    }
+  }
+  
+  return shouldDealDamage;
 }
 
 async function spawnZombie(): Promise<void> {
@@ -994,10 +1174,19 @@ function updateZombies(delta: number): void {
     
     const distanceToPlayer = zombie.position.distanceTo(playerPos);
     
+    // Update attack animation and check if damage should be dealt
+    const shouldDealDamage = updateZombieAttackAnimation(zombie);
+    
     if (distanceToPlayer <= zombie.attackRange) {
-      if (currentTime - zombie.lastAttackTime >= zombie.attackCooldown) {
-        currentHealth -= zombie.attackDamage;
+      // Start attack if not already attacking and cooldown is ready
+      if (!zombie.isAttacking && currentTime - zombie.lastAttackTime >= zombie.attackCooldown) {
+        startZombieAttackAnimation(zombie);
         zombie.lastAttackTime = currentTime;
+      }
+      
+      // Deal damage during strike phase of animation
+      if (shouldDealDamage) {
+        currentHealth -= zombie.attackDamage;
         showTemporaryMessage(`Zombie attacked! Health: ${currentHealth}`, 1000);
         
         if (currentHealth <= 0) {
@@ -1005,13 +1194,60 @@ function updateZombies(delta: number): void {
         }
       }
     } else {
+      // Calculate direction to player
       const direction = new THREE.Vector3()
         .subVectors(playerPos, zombie.position)
         .normalize();
       
-      zombie.velocity.copy(direction).multiplyScalar(zombie.speed);
+      // Make zombie face player direction (Y-axis rotation only to prevent flipping)
+      const angle = Math.atan2(direction.x, direction.z);
+      zombie.mesh.rotation.y = angle;
+      
+      // Add unstable movement with foot dragging
+      zombie.limpCycle += delta * (zombie.limping ? 3.0 : 4.0); // Slower if limping
+      
+      // Calculate movement speed with variations
+      let moveSpeed = zombie.speed;
+      
+      if (zombie.limping) {
+        // Limping creates irregular speed
+        const limpEffect = Math.sin(zombie.limpCycle) * 0.4 + 0.6; // 0.2 to 1.0 multiplier
+        moveSpeed *= limpEffect;
+        
+        // Add foot dragging effect - periodic slowdown
+        if (Math.sin(zombie.limpCycle) < -0.5) {
+          moveSpeed *= 0.3; // Significant slowdown during "drag" phase
+        }
+      }
+      
+      // Add random movement noise
+      zombie.movementNoise.x += (Math.random() - 0.5) * 0.02;
+      zombie.movementNoise.z += (Math.random() - 0.5) * 0.02;
+      
+      // Clamp noise to reasonable limits
+      zombie.movementNoise.x = Math.max(-0.3, Math.min(0.3, zombie.movementNoise.x));
+      zombie.movementNoise.z = Math.max(-0.3, Math.min(0.3, zombie.movementNoise.z));
+      
+      // Apply direction with noise
+      const noisyDirection = direction.clone();
+      noisyDirection.x += zombie.movementNoise.x;
+      noisyDirection.z += zombie.movementNoise.z;
+      noisyDirection.normalize();
+      
+      zombie.velocity.copy(noisyDirection).multiplyScalar(moveSpeed);
       zombie.position.add(zombie.velocity.clone().multiplyScalar(delta));
       zombie.mesh.position.copy(zombie.position);
+      
+      // Add subtle body swaying for limping zombies (only Z-axis to avoid Y-axis conflicts)
+      if (zombie.limping) {
+        const swayAmount = Math.sin(zombie.limpCycle * 1.5) * 0.05;
+        zombie.mesh.rotation.z = swayAmount;
+        zombie.mesh.rotation.x = 0; // Ensure no X-axis rotation
+      } else {
+        // Reset rotations for non-limping zombies
+        zombie.mesh.rotation.x = 0;
+        zombie.mesh.rotation.z = 0;
+      }
     }
   }
 }
@@ -6386,7 +6622,7 @@ function updateProjectiles(delta: number) {
             // First, check specifically for headshot by testing head mesh
             let headMesh: THREE.Mesh | null = null;
             zombie.mesh.traverse((child) => {
-                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.position.y > 1.0) {
+                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.position.y > 1.8) {
                     headMesh = child;
                 }
             });
