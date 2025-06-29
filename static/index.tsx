@@ -890,10 +890,10 @@ function createFallbackZombieModel(scale: number = 1.0, colorVariation: number =
   };
   
   // All positions compensated for scaling - legs touch ground properly
-  const legY = 0.3 / scale - 2.5 + scale; // Half leg height above ground (0.6 leg height / 2)
-  const bodyY = (0.6 + 0.6) / scale - 2.5 + scale; // leg height + half body height
-  const headY = (0.6 + 1.2 + 0.2) / scale - 2.5 + scale; // leg height + body height + half head height
-  const armY = (0.6 + 0.6) / scale - 2.5 + scale; // leg height + half body height (arm center)
+  const legY = 0.3 / scale - 1.5 ; // Half leg height above ground (0.6 leg height / 2)
+  const bodyY = (0.6 + 0.6) / scale - 1.5; // leg height + half body height
+  const headY = (0.6 + 1.2 + 0.2) / scale - 1.5; // leg height + body height + half head height
+  const armY = (0.6 + 0.6) / scale - 1.5 ; // leg height + half body height (arm center)
 
   // Body - positioned above legs
   const bodyGeometry = new THREE.BoxGeometry(0.6, 1.2, 0.4);
@@ -941,7 +941,7 @@ function loadZombieModel(): Promise<{ group: THREE.Group; leftArm: THREE.Mesh; r
   return new Promise((resolve) => {
     // Calculate time-based scaling (stronger zombies over time)
     const timeSurvived = gameStartTime ? (performance.now() - gameStartTime) / 1000 : 0;
-    const timeScaling = 1.0 + Math.min(timeSurvived / 60, 1.0); // Up to 2x size after 1 minute
+    const timeScaling = 1.0 + Math.min(timeSurvived / 120, 1.0); // Up to 2x size after 1 minute
     
     // Random individual scaling (0.8x to 1.2x base size)
     const randomScale = 0.8 + Math.random() * 0.4;
@@ -963,7 +963,7 @@ async function createZombie(position: THREE.Vector3): Promise<Zombie> {
   
   // Calculate time-based stat scaling
   const timeSurvived = gameStartTime ? (performance.now() - gameStartTime) / 1000 : 0;
-  const timeMultiplier = 1.0 + Math.min(timeSurvived / 60, 9.0); // Up to 10x stats after 60 seconds
+  const timeMultiplier = 1.0 + Math.min(timeSurvived / 120, 9.0); // Up to 10x stats after 60 seconds
   
   console.log(`Zombie Stats: TimeSurvived=${timeSurvived.toFixed(1)}s, TimeMultiplier=${timeMultiplier.toFixed(2)}x`);
   
