@@ -5219,7 +5219,7 @@ function handleGameOver(playerWon: boolean) {
         instructionText.textContent = message;
         if (p2pInstructionText) p2pInstructionText.style.display = 'none';
     }
-    if (dataChannel && dataChannel.readyState === 'open') { 
+    if (dataChannel ) { 
          const gameOverData: GameEventGameOverData = { 
              winnerIsPlayerOne: playerWon ? isPlayerOne : (isPlayerOne === null ? null : !isPlayerOne),
              defeatedPlayerId: playerWon ? undefined : (clientId || 'unknown')
