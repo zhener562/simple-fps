@@ -2,7 +2,6 @@
 import * as THREE from 'three';
 import { PointerLockControls } from './controls/PointerLockControls.local.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // Simple PRNG (Mulberry32)
 class PRNG {
@@ -367,7 +366,7 @@ interface Zombie {
 }
 
 const zombies: Zombie[] = [];
-const MAX_ZOMBIES = 10; // Limit max zombies to prevent memory issues
+const MAX_ZOMBIES = 50; // Limit max zombies to prevent memory issues
 let zombieSpawnTimer = 0;
 let zombieSpawnInterval = 5000; // Start with 5 seconds
 let zombieSpawnCount = 1; // Zombies per spawn
@@ -375,7 +374,7 @@ let gameStartTime = 0;
 let survivedTime = 0;
 let zombiesKilled = 0;
 let weaponDamageMultiplier = 1.0;
-const DAMAGE_UPGRADE_MULTIPLIER = 1.1;
+const DAMAGE_UPGRADE_MULTIPLIER = 1.05;
 let currentHealth = MAX_HEALTH;
 let lastDamageTime = 0;
 let lastMovementTime = 0;
@@ -854,22 +853,7 @@ function generateRandomSpawnPosition(): THREE.Vector3 {
     return new THREE.Vector3(x, PLAYER_HEIGHT, z);
 }
 
-// Zombie model cache
-const zombieModelCache: THREE.Group | null = null;
-const gltfLoader = new GLTFLoader();
-
-// WebGL context management
-let isWebGLContextLost = false;
-
-function handleWebGLContextLost() {
-  isWebGLContextLost = true;
-  console.warn('WebGL context lost - switching to fallback zombie models');
-}
-
-function handleWebGLContextRestored() {
-  isWebGLContextLost = false;
-  console.log('WebGL context restored');
-}
+// Using fallback zombie models only - file loading removed
 
 function createFallbackZombieModel(): THREE.Group {
   // Fallback to improved box geometry
@@ -919,50 +903,9 @@ function createFallbackZombieModel(): THREE.Group {
 // Load zombie model (fallback to box if no model available)
 function loadZombieModel(): Promise<THREE.Group> {
   return new Promise((resolve) => {
-    // If WebGL context is lost, use fallback immediately
-    if (isWebGLContextLost) {
-      console.log('Using fallback zombie model due to WebGL context loss');
-      resolve(createFallbackZombieModel());
-      return;
-    }
-    
-    // Try to load GLB model first
-    gltfLoader.load(
-      './assets/Custom Rigg/Zombie_Schoolgirl_01_compressed.glb', // Compressed GLB file
-      (gltf) => {
-        const model = gltf.scene.clone();
-        
-        // Log original model size for debugging
-        const bbox = new THREE.Box3().setFromObject(model);
-        const size = bbox.getSize(new THREE.Vector3());
-        console.log('Original zombie model size:', size);
-        console.log('Model bounding box:', bbox);
-        
-        // Use original textures from the compressed model
-        
-        // Adjust scale for appropriate zombie size 
-        // The Blender model is extremely large, scale down to 0.01% of original
-        model.scale.set(0.0001, 0.0001, 0.0001); // 1/10000 size
-        
-        // Log scaled size
-        const scaledBbox = new THREE.Box3().setFromObject(model);
-        const scaledSize = scaledBbox.getSize(new THREE.Vector3());
-        console.log('Scaled zombie model size:', scaledSize);
-        
-        // Ensure model is positioned correctly on ground
-        model.position.y = 0;
-        resolve(model);
-      },
-      undefined,
-      (error) => {
-        console.warn('GLB zombie model failed to load, using fallback geometry:', error);
-        // Mark context as potentially problematic
-        if (error.toString().includes('texture') || error.toString().includes('WebGL')) {
-          isWebGLContextLost = true;
-        }
-        resolve(createFallbackZombieModel());
-      }
-    );
+    // Always use fallback zombie model (manual creation)
+    console.log('Using manual fallback zombie model');
+    resolve(createFallbackZombieModel());
   });
 }
 
@@ -977,7 +920,7 @@ async function createZombie(position: THREE.Vector3): Promise<Zombie> {
     mesh: zombieModel as any, // Group can be treated as Mesh for our purposes
     position: position.clone(),
     velocity: new THREE.Vector3(),
-    health: 50,
+    health: 500,
     maxHealth: 50,
     speed: 2.0,
     attackRange: 2.0,
@@ -1073,11 +1016,18 @@ function updateZombies(delta: number): void {
   }
 }
 
-function damageZombie(zombieId: string, damage: number): void {
+function damageZombie(zombieId: string, damage: number, isHeadshot: boolean = false): void {
   const zombie = zombies.find(z => z.id === zombieId);
   if (!zombie) return;
   
   zombie.health -= damage;
+  
+  // Show damage feedback with headshot indicator
+  const hitMessage = isHeadshot 
+    ? `HEADSHOT! -${damage} HP`
+    : `HIT! -${damage} HP`;
+    
+  showTemporaryMessage(hitMessage, 300);
   
   if (zombie.health <= 0) {
     zombie.isAlive = false;
@@ -1085,7 +1035,10 @@ function damageZombie(zombieId: string, damage: number): void {
     
     spawnPowerUp(zombie.position);
     
-    showTemporaryMessage(`Zombie killed! Total: ${zombiesKilled}`, 500);
+    const killMessage = isHeadshot 
+      ? `Zombie headshot kill! Total: ${zombiesKilled}`
+      : `Zombie killed! Total: ${zombiesKilled}`;
+    showTemporaryMessage(killMessage, 500);
   }
 }
 
@@ -6427,22 +6380,67 @@ function updateProjectiles(delta: number) {
         for (const zombie of zombies) {
             if (!zombie.isAlive) continue;
             
-            const zombieBoundingBox = new THREE.Box3().setFromObject(zombie.mesh);
-            const expandedZombieBox = zombieBoundingBox.clone().expandByScalar(0.2);
+            let isHeadshot = false;
+            let hitZombie = false;
             
-            let intersectsThisFrame = false;
-            if (projectileSegmentLength >= 0.0001) {
-                const hitZombiePoint = _projectileCollisionRay.intersectBox(expandedZombieBox, _projectileIntersectionPoint);
-                if (hitZombiePoint && oldPosition.distanceTo(hitZombiePoint) <= projectileSegmentLength) {
-                    intersectsThisFrame = true;
+            // First, check specifically for headshot by testing head mesh
+            let headMesh: THREE.Mesh | null = null;
+            zombie.mesh.traverse((child) => {
+                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.position.y > 1.0) {
+                    headMesh = child;
+                }
+            });
+            
+            if (headMesh) {
+                // Create bounding box for head only with slight expansion
+                const headBoundingBox = new THREE.Box3().setFromObject(headMesh);
+                const expandedHeadBox = headBoundingBox.clone().expandByScalar(0.1);
+                
+                // Check ray intersection with head first
+                if (projectileSegmentLength >= 0.0001) {
+                    const hitHeadPoint = _projectileCollisionRay.intersectBox(expandedHeadBox, _projectileIntersectionPoint);
+                    if (hitHeadPoint && oldPosition.distanceTo(hitHeadPoint) <= projectileSegmentLength) {
+                        isHeadshot = true;
+                        hitZombie = true;
+                    }
+                }
+                
+                // Check point containment for head
+                if (!hitZombie && expandedHeadBox.containsPoint(p.mesh.position)) {
+                    isHeadshot = true;
+                    hitZombie = true;
                 }
             }
             
-            if (intersectsThisFrame || expandedZombieBox.containsPoint(p.mesh.position)) {
+            // If not a headshot, check for body hit
+            if (!hitZombie) {
+                const zombieBoundingBox = new THREE.Box3().setFromObject(zombie.mesh);
+                const expandedZombieBox = zombieBoundingBox.clone().expandByScalar(0.2);
+                
+                let intersectsThisFrame = false;
+                if (projectileSegmentLength >= 0.0001) {
+                    const hitZombiePoint = _projectileCollisionRay.intersectBox(expandedZombieBox, _projectileIntersectionPoint);
+                    if (hitZombiePoint && oldPosition.distanceTo(hitZombiePoint) <= projectileSegmentLength) {
+                        intersectsThisFrame = true;
+                    }
+                }
+                
+                if (intersectsThisFrame || expandedZombieBox.containsPoint(p.mesh.position)) {
+                    hitZombie = true;
+                }
+            }
+            
+            if (hitZombie) {
                 const weaponStats = weaponStatsDB[p.weaponType];
                 if (weaponStats && typeof weaponStats.damage === 'number') {
-                    const damage = Math.floor(weaponStats.damage * weaponDamageMultiplier);
-                    damageZombie(zombie.id, damage);
+                    let damage = Math.floor(weaponStats.damage * weaponDamageMultiplier);
+                    
+                    // Apply headshot multiplier (5x damage like multiplayer)
+                    if (isHeadshot) {
+                        damage *= 5;
+                    }
+                    
+                    damageZombie(zombie.id, damage, isHeadshot);
                 }
                 hitSomething = true;
                 break;
