@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from './controls/PointerLockControls.local.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // Simple PRNG (Mulberry32)
 class PRNG {
@@ -347,6 +348,34 @@ let bankReturnSpeed = 0.6; // How fast bike returns to upright (even slower)
 
 // Health system
 const MAX_HEALTH = 100;
+
+// Zombie system
+interface Zombie {
+  id: string;
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  health: number;
+  maxHealth: number;
+  speed: number;
+  attackRange: number;
+  attackDamage: number;
+  lastAttackTime: number;
+  attackCooldown: number;
+  isAlive: boolean;
+  spawnTime: number;
+}
+
+const zombies: Zombie[] = [];
+const MAX_ZOMBIES = 10; // Limit max zombies to prevent memory issues
+let zombieSpawnTimer = 0;
+let zombieSpawnInterval = 5000; // Start with 5 seconds
+let zombieSpawnCount = 1; // Zombies per spawn
+let gameStartTime = 0;
+let survivedTime = 0;
+let zombiesKilled = 0;
+let weaponDamageMultiplier = 1.0;
+const DAMAGE_UPGRADE_MULTIPLIER = 1.1;
 let currentHealth = MAX_HEALTH;
 let lastDamageTime = 0;
 let lastMovementTime = 0;
@@ -819,11 +848,354 @@ function generateRandomSpawnPosition(): THREE.Vector3 {
                       performance.now();
     const uniqueSpawnPrng = new PRNG(uniqueSeed);
     
-    // Generate random X and Z coordinates within the map bounds
     const x = uniqueSpawnPrng.randFloat(-maxRange, maxRange);
     const z = uniqueSpawnPrng.randFloat(-maxRange, maxRange);
     
     return new THREE.Vector3(x, PLAYER_HEIGHT, z);
+}
+
+// Zombie model cache
+const zombieModelCache: THREE.Group | null = null;
+const gltfLoader = new GLTFLoader();
+
+// WebGL context management
+let isWebGLContextLost = false;
+
+function handleWebGLContextLost() {
+  isWebGLContextLost = true;
+  console.warn('WebGL context lost - switching to fallback zombie models');
+}
+
+function handleWebGLContextRestored() {
+  isWebGLContextLost = false;
+  console.log('WebGL context restored');
+}
+
+function createFallbackZombieModel(): THREE.Group {
+  // Fallback to improved box geometry
+  const zombieGroup = new THREE.Group();
+  
+  // Body
+  const bodyGeometry = new THREE.BoxGeometry(0.6, 1.2, 0.4);
+  const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0x4a5d23 });
+  const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  bodyMesh.position.y = 0.6;
+  zombieGroup.add(bodyMesh);
+  
+  // Head
+  const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  const headMaterial = new THREE.MeshLambertMaterial({ color: 0x6b7c32 });
+  const headMesh = new THREE.Mesh(headGeometry, headMaterial);
+  headMesh.position.y = 1.4;
+  zombieGroup.add(headMesh);
+  
+  // Arms
+  const armGeometry = new THREE.BoxGeometry(0.2, 0.8, 0.2);
+  const armMaterial = new THREE.MeshLambertMaterial({ color: 0x5a6b28 });
+  
+  const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+  leftArm.position.set(-0.5, 0.8, 0);
+  zombieGroup.add(leftArm);
+  
+  const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+  rightArm.position.set(0.5, 0.8, 0);
+  zombieGroup.add(rightArm);
+  
+  // Legs
+  const legGeometry = new THREE.BoxGeometry(0.2, 0.6, 0.2);
+  const legMaterial = new THREE.MeshLambertMaterial({ color: 0x3d4a1f });
+  
+  const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+  leftLeg.position.set(-0.2, 0.3, 0);
+  zombieGroup.add(leftLeg);
+  
+  const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+  rightLeg.position.set(0.2, 0.3, 0);
+  zombieGroup.add(rightLeg);
+  
+  return zombieGroup;
+}
+
+// Load zombie model (fallback to box if no model available)
+function loadZombieModel(): Promise<THREE.Group> {
+  return new Promise((resolve) => {
+    // If WebGL context is lost, use fallback immediately
+    if (isWebGLContextLost) {
+      console.log('Using fallback zombie model due to WebGL context loss');
+      resolve(createFallbackZombieModel());
+      return;
+    }
+    
+    // Try to load GLB model first
+    gltfLoader.load(
+      './assets/Custom Rigg/Zombie_Schoolgirl_01_compressed.glb', // Compressed GLB file
+      (gltf) => {
+        const model = gltf.scene.clone();
+        
+        // Log original model size for debugging
+        const bbox = new THREE.Box3().setFromObject(model);
+        const size = bbox.getSize(new THREE.Vector3());
+        console.log('Original zombie model size:', size);
+        console.log('Model bounding box:', bbox);
+        
+        // Use original textures from the compressed model
+        
+        // Adjust scale for appropriate zombie size 
+        // The Blender model is extremely large, scale down to 0.01% of original
+        model.scale.set(0.0001, 0.0001, 0.0001); // 1/10000 size
+        
+        // Log scaled size
+        const scaledBbox = new THREE.Box3().setFromObject(model);
+        const scaledSize = scaledBbox.getSize(new THREE.Vector3());
+        console.log('Scaled zombie model size:', scaledSize);
+        
+        // Ensure model is positioned correctly on ground
+        model.position.y = 0;
+        resolve(model);
+      },
+      undefined,
+      (error) => {
+        console.warn('GLB zombie model failed to load, using fallback geometry:', error);
+        // Mark context as potentially problematic
+        if (error.toString().includes('texture') || error.toString().includes('WebGL')) {
+          isWebGLContextLost = true;
+        }
+        resolve(createFallbackZombieModel());
+      }
+    );
+  });
+}
+
+// Zombie management functions
+async function createZombie(position: THREE.Vector3): Promise<Zombie> {
+  const zombieModel = await loadZombieModel();
+  zombieModel.position.copy(position);
+  scene.add(zombieModel);
+  
+  const zombie: Zombie = {
+    id: Math.random().toString(36).substring(2, 9),
+    mesh: zombieModel as any, // Group can be treated as Mesh for our purposes
+    position: position.clone(),
+    velocity: new THREE.Vector3(),
+    health: 50,
+    maxHealth: 50,
+    speed: 2.0,
+    attackRange: 2.0,
+    attackDamage: 15,
+    lastAttackTime: 0,
+    attackCooldown: 1500,
+    isAlive: true,
+    spawnTime: performance.now()
+  };
+  
+  return zombie;
+}
+
+async function spawnZombie(): Promise<void> {
+  if (gameMode !== 'singleplayer') return;
+  
+  // Don't spawn if max zombies reached
+  if (zombies.length >= MAX_ZOMBIES) {
+    console.log('Max zombie limit reached, skipping spawn');
+    return;
+  }
+  
+  const spawnPosition = generateRandomSpawnPosition();
+  spawnPosition.y = PLAYER_HEIGHT;
+  
+  const playerPos = controls.getObject().position;
+  const distance = spawnPosition.distanceTo(playerPos);
+  
+  if (distance < 15) {
+    const direction = new THREE.Vector3()
+      .subVectors(spawnPosition, playerPos)
+      .normalize()
+      .multiplyScalar(20);
+    spawnPosition.add(direction);
+  }
+  
+  try {
+    const zombie = await createZombie(spawnPosition);
+    zombies.push(zombie);
+    console.log(`Spawned zombie. Total: ${zombies.length}/${MAX_ZOMBIES}`);
+  } catch (error) {
+    console.error('Failed to spawn zombie:', error);
+  }
+}
+
+function updateZombies(delta: number): void {
+  if (gameMode !== 'singleplayer') return;
+  
+  const playerPos = controls.getObject().position;
+  const currentTime = performance.now();
+  
+  for (let i = zombies.length - 1; i >= 0; i--) {
+    const zombie = zombies[i];
+    
+    if (!zombie.isAlive) {
+      scene.remove(zombie.mesh);
+      // Dispose geometry and materials for Groups
+      zombie.mesh.traverse((child: any) => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach((mat: any) => mat.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      zombies.splice(i, 1);
+      continue;
+    }
+    
+    const distanceToPlayer = zombie.position.distanceTo(playerPos);
+    
+    if (distanceToPlayer <= zombie.attackRange) {
+      if (currentTime - zombie.lastAttackTime >= zombie.attackCooldown) {
+        currentHealth -= zombie.attackDamage;
+        zombie.lastAttackTime = currentTime;
+        showTemporaryMessage(`Zombie attacked! Health: ${currentHealth}`, 1000);
+        
+        if (currentHealth <= 0) {
+          handlePlayerDeath();
+        }
+      }
+    } else {
+      const direction = new THREE.Vector3()
+        .subVectors(playerPos, zombie.position)
+        .normalize();
+      
+      zombie.velocity.copy(direction).multiplyScalar(zombie.speed);
+      zombie.position.add(zombie.velocity.clone().multiplyScalar(delta));
+      zombie.mesh.position.copy(zombie.position);
+    }
+  }
+}
+
+function damageZombie(zombieId: string, damage: number): void {
+  const zombie = zombies.find(z => z.id === zombieId);
+  if (!zombie) return;
+  
+  zombie.health -= damage;
+  
+  if (zombie.health <= 0) {
+    zombie.isAlive = false;
+    zombiesKilled++;
+    
+    spawnPowerUp(zombie.position);
+    
+    showTemporaryMessage(`Zombie killed! Total: ${zombiesKilled}`, 500);
+  }
+}
+
+function spawnPowerUp(position: THREE.Vector3): void {
+  const powerUpGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+  const powerUpMaterial = new THREE.MeshLambertMaterial({ color: 0xff6b35 });
+  const powerUpMesh = new THREE.Mesh(powerUpGeometry, powerUpMaterial);
+  
+  powerUpMesh.position.copy(position);
+  powerUpMesh.position.y += 0.5;
+  scene.add(powerUpMesh);
+  
+  const checkCollection = () => {
+    const playerPos = controls.getObject().position;
+    const distance = powerUpMesh.position.distanceTo(playerPos);
+    
+    if (distance < 2.0) {
+      weaponDamageMultiplier *= DAMAGE_UPGRADE_MULTIPLIER;
+      scene.remove(powerUpMesh);
+      powerUpMesh.geometry.dispose();
+      (powerUpMesh.material as THREE.Material).dispose();
+      
+      showTemporaryMessage(`Weapon upgraded! Damage x${weaponDamageMultiplier.toFixed(2)}`, 1000);
+    } else {
+      requestAnimationFrame(checkCollection);
+    }
+  };
+  
+  requestAnimationFrame(checkCollection);
+}
+
+function handlePlayerDeath(): void {
+  myDeaths++;
+  survivedTime = (performance.now() - gameStartTime) / 1000;
+  
+  const finalScore = Math.floor(zombiesKilled * 100 + survivedTime * 10);
+  
+  showGameOverScreen(finalScore);
+  
+  if (myDeaths >= DEATHS_TO_LOSE) {
+    gameMode = 'idle';
+    resetGameState();
+  } else {
+    setTimeout(() => {
+      currentHealth = MAX_HEALTH;
+      triggerRespawn();
+    }, 3000);
+  }
+}
+
+function showGameOverScreen(score: number): void {
+  const gameOverDiv = document.createElement('div');
+  gameOverDiv.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 30px;
+    border-radius: 10px;
+    text-align: center;
+    font-family: Arial, sans-serif;
+    z-index: 1000;
+  `;
+  
+  gameOverDiv.innerHTML = `
+    <h2>Game Over!</h2>
+    <p>Survived: ${survivedTime.toFixed(1)} seconds</p>
+    <p>Zombies Killed: ${zombiesKilled}</p>
+    <p>Final Score: ${score}</p>
+    <p>Deaths: ${myDeaths}/${DEATHS_TO_LOSE}</p>
+    <button onclick="this.parentElement.remove()" style="
+      background: #ff6b35;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-top: 10px;
+    ">Close</button>
+  `;
+  
+  document.body.appendChild(gameOverDiv);
+}
+
+function resetGameState(): void {
+  zombies.forEach(zombie => {
+    scene.remove(zombie.mesh);
+    // Dispose geometry and materials for Groups
+    zombie.mesh.traverse((child: any) => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((mat: any) => mat.dispose());
+        } else {
+          child.material.dispose();
+        }
+      }
+    });
+  });
+  zombies.length = 0;
+  
+  zombiesKilled = 0;
+  weaponDamageMultiplier = 1.0;
+  survivedTime = 0;
+  gameStartTime = 0;
+  zombieSpawnTimer = 0;
+  zombieSpawnInterval = 5000;
+  zombieSpawnCount = 1;
 }
 
 function getSpawnPointsForCurrentMap(): THREE.Vector3[] {
@@ -1385,31 +1757,40 @@ function selectRandomSpawnPoint(
 
 
 function showTemporaryMessage(message: string, duration: number = 500) {
-    if (isGameOver || !instructionOverlay || !instructionText) return;
+    if (isGameOver) return;
 
-    const originalInstructionText = instructionText.textContent;
-    const originalP2PTextDisplay = p2pInstructionText ? p2pInstructionText.style.display : 'none';
+    // Create or get the notification element
+    let notification = document.getElementById('corner-notification');
+    if (!notification) {
+        notification = document.createElement('div');
+        notification.id = 'corner-notification';
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 1001;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            max-width: 200px;
+            word-wrap: break-word;
+            display: none;
+        `;
+        document.body.appendChild(notification);
+    }
 
-    instructionOverlay.style.display = 'flex';
-    instructionText.textContent = message;
-    if (p2pInstructionText) p2pInstructionText.style.display = 'none';
+    // Show the notification
+    notification.textContent = message;
+    notification.style.display = 'block';
 
+    // Hide after duration
     setTimeout(() => {
-        if (isGameOver) return;
-
-        if (instructionText.textContent === message) {
-            if (controls.isLocked) {
-                instructionOverlay.style.display = 'none';
-            } else {
-                if (gameMode === 'multiplayer' && (!dataChannel || dataChannel.readyState !== 'open')) {
-                    instructionText.textContent = "Connect via P2P, then Click to Start";
-                    if (p2pInstructionText) p2pInstructionText.style.display = originalP2PTextDisplay;
-                } else if (gameMode === 'singleplayer') {
-                    instructionText.textContent = "Click to Start Single Player";
-                } else {
-                     instructionText.textContent = "Click to Start";
-                }
-            }
+        if (notification) {
+            notification.style.display = 'none';
         }
     }, duration);
 }
@@ -2546,6 +2927,9 @@ function startGame() {
     prng = new PRNG(currentMapSeed); 
     spawnPrng = new PRNG(currentMapSeed + getSpawnSeedOffset());
     console.log(`SP Start: Seed=${currentMapSeed}, Type=${currentMapType}, Selected=${selectedMapType}`);
+    
+    // Initialize zombie system for single player
+    gameStartTime = performance.now();
   } else if (gameMode === 'multiplayer') {
     instructionText.textContent = "Connect via P2P, then Click to Start";
     if (p2pInstructionText) p2pInstructionText.style.display = 'block';
@@ -2609,6 +2993,12 @@ function resetGameScene() {
     playerDeaths.clear();
     lastFireTime = 0;
     isFiringSMGActual = false;
+    
+    // Initialize zombie system for single player
+    if (gameMode === 'singleplayer') {
+        resetGameState();
+        gameStartTime = performance.now();
+    }
     
     
 
@@ -6032,6 +6422,34 @@ function updateProjectiles(delta: number) {
         }
     }
     
+    // Check collision with zombies (single player only)
+    if (!hitSomething && gameMode === 'singleplayer') {
+        for (const zombie of zombies) {
+            if (!zombie.isAlive) continue;
+            
+            const zombieBoundingBox = new THREE.Box3().setFromObject(zombie.mesh);
+            const expandedZombieBox = zombieBoundingBox.clone().expandByScalar(0.2);
+            
+            let intersectsThisFrame = false;
+            if (projectileSegmentLength >= 0.0001) {
+                const hitZombiePoint = _projectileCollisionRay.intersectBox(expandedZombieBox, _projectileIntersectionPoint);
+                if (hitZombiePoint && oldPosition.distanceTo(hitZombiePoint) <= projectileSegmentLength) {
+                    intersectsThisFrame = true;
+                }
+            }
+            
+            if (intersectsThisFrame || expandedZombieBox.containsPoint(p.mesh.position)) {
+                const weaponStats = weaponStatsDB[p.weaponType];
+                if (weaponStats && typeof weaponStats.damage === 'number') {
+                    const damage = Math.floor(weaponStats.damage * weaponDamageMultiplier);
+                    damageZombie(zombie.id, damage);
+                }
+                hitSomething = true;
+                break;
+            }
+        }
+    }
+    
     // Check collision with map features (walls, obstacles, buildings)
     if (!hitSomething) {
         for (const feature of mapFeatures) {
@@ -6694,6 +7112,27 @@ function animate() {
   updateWeaponDynamics(delta); 
   updateProjectiles(delta);
   if (gameMode === 'multiplayer') updateRemoteProjectiles(delta);
+  
+  // Update zombie system for single player
+  if (gameMode === 'singleplayer') {
+    updateZombies(delta);
+    
+    // Spawn zombies at intervals
+    zombieSpawnTimer += delta * 1000;
+    if (zombieSpawnTimer >= zombieSpawnInterval) {
+      for (let i = 0; i < zombieSpawnCount; i++) {
+        spawnZombie();
+      }
+      zombieSpawnTimer = 0;
+      
+      // Increase difficulty over time
+      const timeSurvived = (performance.now() - gameStartTime) / 1000;
+      if (timeSurvived > 30) { // After 30 seconds
+        zombieSpawnInterval = Math.max(2000, 5000 - (timeSurvived - 30) * 50); // Faster spawning
+        zombieSpawnCount = Math.min(3, 1 + Math.floor((timeSurvived - 30) / 60)); // More zombies
+      }
+    }
+  }
   
   updateAmmoDisplay();
   updateEnemyCompass();

@@ -754,3 +754,20 @@ canvas {
   opacity: 0.8;
   margin-top: 2px;
 }
+
+#corner-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  z-index: 1001;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  max-width: 200px;
+  word-wrap: break-word;
+  display: none;
+}

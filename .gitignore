@@ -3,3 +3,4 @@
 .shuttle*
 Secrets*.toml
 /static/node_modules
+/static/dist/assets/Custom Rigg/Zombie_Schoolgirl_01.glb
