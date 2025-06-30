@@ -104,6 +104,16 @@ let bikeDecelerateActual = false;
 let bikeTurnLeftActual = false;
 let bikeTurnRightActual = false;
 
+// Aircraft controls
+let planePitchUpActual = false;
+let planePitchDownActual = false;
+let planeRollLeftActual = false;
+let planeRollRightActual = false;
+let planeYawLeftActual = false;
+let planeYawRightActual = false;
+let planeThrottleUpActual = false;
+let planeThrottleDownActual = false;
+
 // Jump variables
 let isOnGround = true;
 let verticalVelocity = 0;
@@ -129,6 +139,49 @@ let bikeHealth = 100.0; // Maximum bike durability
 let bikeMaxHealth = 100.0;
 let bikeLastCollisionTime = 0;
 let bikeCollisionCooldown = 100; // ms between collision checks to prevent spam
+
+// Zero Fighter Aircraft System
+let isOnPlane = false;
+// Expose isOnPlane to window for PointerLockControls access
+(window as any).isOnPlane = false;
+let planeModel: THREE.Group;
+let planePosition = new THREE.Vector3(0, 100, 0); // Start at altitude
+let planeQuaternion = new THREE.Quaternion(); // Orientation using quaternions
+let planeVelocity = new THREE.Vector3(0, 0, 50); // Initial forward velocity (matching model)
+let planeAngularVelocity = new THREE.Vector3(0, 0, 0); // Angular velocity for rotation
+
+// Aircraft physical properties (Zero Fighter specifications)
+let planeHealth = 100.0;
+let planeMaxHealth = 100.0;
+let planeMass = 2410.0; // kg (A6M2 Zero mass)
+let planeWingArea = 22.44; // m² (wing surface area)
+let planeDragCoefficient = 0.025; // Clean configuration
+let planeLiftCoefficient = 1.2; // Maximum lift coefficient
+let planeMaxThrust = 25000.0; // N (Boosted engine for better acceleration)
+let planeCurrentThrust = 0.0; // Current thrust percentage (0-1)
+
+// Flight control inputs
+let planeControlInputs = {
+    pitch: 0.0,    // Elevator input (-1 to 1)
+    roll: 0.0,     // Aileron input (-1 to 1) 
+    yaw: 0.0,      // Rudder input (-1 to 1)
+    throttle: 0.5  // Throttle input (0 to 1)
+};
+
+// Environmental constants
+const AIR_DENSITY = 1.225; // kg/m³ at sea level
+const AIRCRAFT_GRAVITY = 9.81; // m/s² for aircraft physics
+
+// Cloud system variables
+const clouds: THREE.Mesh[] = [];
+let cloudUpdateTime = 0;
+
+// Aircraft machine gun system
+let aircraftMachineGunFireRate = 600; // rounds per minute (10 per second)
+let aircraftLastFireTime = 0;
+let aircraftAmmo = 500; // Machine gun ammo count
+let aircraftMaxAmmo = 500;
+let isFiringAircraftGunActual = false; // Flag for continuous firing
 
 // Unified function to create bike explosion effect
 function createBikeExplosion(position?: THREE.Vector3, enableCameraShake: boolean = true): void {
@@ -554,6 +607,121 @@ function updateBikeDurabilityIndicator(): void {
         bikeDurabilityIndicator.style.display = 'block';
     } else {
         bikeDurabilityIndicator.style.display = 'none';
+    }
+}
+
+// Update aircraft cockpit HUD
+function updateAircraftHUD(): void {
+    const aircraftHUD = document.getElementById('aircraft-hud');
+    if (!aircraftHUD) return;
+    
+    if (isOnPlane) {
+        // Show aircraft HUD
+        aircraftHUD.style.display = 'block';
+        
+        // Update altitude (convert meters to feet for aviation standard)
+        const altitudeValue = document.getElementById('altitude-value');
+        if (altitudeValue) {
+            const altitudeFeet = Math.round(planePosition.y * 3.28084); // meters to feet
+            altitudeValue.textContent = altitudeFeet.toString();
+        }
+        
+        // Update airspeed (convert m/s to knots)
+        const airspeed = planeVelocity.length();
+        const airspeedKnots = Math.round(airspeed * 1.94384); // m/s to knots
+        const airspeedValue = document.getElementById('airspeed-value');
+        if (airspeedValue) {
+            airspeedValue.textContent = airspeedKnots.toString();
+        }
+        
+        // Update throttle percentage
+        const throttlePercentage = Math.round(planeControlInputs.throttle * 100);
+        const throttleValue = document.getElementById('throttle-value');
+        if (throttleValue) {
+            throttleValue.textContent = throttlePercentage.toString();
+        }
+        
+        // Calculate and display angle of attack
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(planeQuaternion);
+        const velocityDir = airspeed > 0.1 ? planeVelocity.clone().normalize() : forwardDir.clone();
+        const relativeWind = velocityDir.clone().multiplyScalar(-1);
+        const aoaRadians = Math.acos(Math.max(-1, Math.min(1, forwardDir.dot(relativeWind))));
+        const aoaDegrees = THREE.MathUtils.radToDeg(aoaRadians);
+        
+        const aoaDisplay = document.getElementById('aoa-value');
+        const aoaIndicator = document.getElementById('aoa-indicator');
+        if (aoaDisplay) {
+            aoaDisplay.textContent = Math.round(aoaDegrees).toString();
+        }
+        
+        // Update pitch attitude indicator
+        const pitchValue = document.getElementById('pitch-value');
+        if (pitchValue) {
+            const euler = new THREE.Euler().setFromQuaternion(planeQuaternion);
+            const pitchDegrees = THREE.MathUtils.radToDeg(euler.x);
+            pitchValue.textContent = Math.round(pitchDegrees).toString();
+        }
+        
+        // Color coding and warnings based on flight conditions
+        const altimeter = document.getElementById('altimeter');
+        const airspeedIndicator = document.getElementById('airspeed-indicator');
+        const stallWarning = document.getElementById('stall-warning');
+        
+        // Altitude warning colors (using feet)
+        const altitudeFeet = planePosition.y * 3.28084;
+        if (altimeter) {
+            if (altitudeFeet < 164) { // < 50m
+                altimeter.style.color = '#ff4444';
+                altimeter.style.borderColor = '#ff4444';
+            } else if (altitudeFeet < 656) { // < 200m
+                altimeter.style.color = '#ff9900';
+                altimeter.style.borderColor = '#ff9900';
+            } else {
+                altimeter.style.color = '#00ff88';
+                altimeter.style.borderColor = '#00ff88';
+            }
+        }
+        
+        // Airspeed and stall warning system
+        const stallSpeed = 22.0; // m/s (realistic Zero stall speed)
+        const stallSpeedKnots = stallSpeed * 1.94384; // Convert to knots for display
+        
+        if (airspeedIndicator) {
+            if (airspeed < stallSpeed) {
+                airspeedIndicator.style.color = '#ff4444';
+                airspeedIndicator.style.borderColor = '#ff4444';
+            } else if (airspeedKnots < stallSpeedKnots + 20) {
+                airspeedIndicator.style.color = '#ff9900';
+                airspeedIndicator.style.borderColor = '#ff9900';
+            } else {
+                airspeedIndicator.style.color = '#00ff88';
+                airspeedIndicator.style.borderColor = '#00ff88';
+            }
+        }
+        
+        // AOA indicator color coding
+        if (aoaIndicator) {
+            if (aoaDegrees > 20) { // Post-stall
+                aoaIndicator.className = 'instrument stall';
+            } else if (aoaDegrees > 18) { // Critical AOA
+                aoaIndicator.className = 'instrument critical';
+            } else {
+                aoaIndicator.className = 'instrument';
+            }
+        }
+        
+        // Stall warning display
+        if (stallWarning) {
+            const stallSeverity = airspeed < stallSpeed ? (stallSpeed - airspeed) / stallSpeed : 0;
+            if (stallSeverity > 0.3 || aoaDegrees > 18) {
+                stallWarning.style.display = 'block';
+            } else {
+                stallWarning.style.display = 'none';
+            }
+        }
+        
+    } else {
+        aircraftHUD.style.display = 'none';
     }
 }
 
@@ -1717,7 +1885,7 @@ function createGroundMesh() {
     }
     
     // Set ground size based on map type
-    const groundSize = currentMapType === MapType.PLAINS ? 2000 : 500; // 2km x 2km for plains, 500x500 for others
+    const groundSize = currentMapType === MapType.PLAINS ? 10000 : 500; // 10km x 10km for plains, 500x500 for others
     const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
     const groundMaterial = new THREE.MeshStandardMaterial({ color: ARENA_GROUND_COLOR, roughness: 0.9 }); 
     groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
@@ -2589,6 +2757,12 @@ function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, we
             break;
     }
     
+    // Hide weapons when in aircraft mode
+    if (isOnPlane) {
+        activeMesh.visible = false;
+        return;
+    }
+    
     activeMesh.visible = true;
     
     // Position weapon based on aiming state
@@ -3310,7 +3484,7 @@ function resetGameScene() {
         } else if (currentMapType === MapType.PLAINS) {
             scene.fog.color.setHex(0x87CEEB); // Light sky blue
             scene.fog.near = 0;
-            scene.fog.far = 2000; // Extended to 2000m for long-range visibility
+            scene.fog.far = 8000; // Extended to 8000m for vast plains visibility
         } else if (currentMapType === MapType.MOUNTAIN) {
             scene.fog.color.setHex(0x6B8E60); // Mountain mist color
             scene.fog.near = 0;
@@ -3731,6 +3905,264 @@ function createSpearModel(): { model: THREE.Group; tipPoint: THREE.Object3D } {
     return { model: spearGroup, tipPoint };
 }
 
+function createZeroFighterModel(): { model: THREE.Group; centerPoint: THREE.Object3D } {
+    const aircraftGroup = new THREE.Group();
+    
+    // Aircraft materials
+    const fuselageMaterial = new THREE.MeshLambertMaterial({ color: 0x4A5D23 }); // Olive green
+    const engineMaterial = new THREE.MeshLambertMaterial({ color: 0x2C2C2C }); // Dark gray engine
+    const propellerMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown wood propeller
+    const windowMaterial = new THREE.MeshLambertMaterial({ color: 0x87CEEB, transparent: true, opacity: 0.3 }); // Light blue glass
+    const wingMaterial = new THREE.MeshLambertMaterial({ color: 0x4A5D23 }); // Same as fuselage
+    
+    // Main fuselage (elongated ellipsoid)
+    const fuselageGeometry = new THREE.CylinderGeometry(0.4, 0.2, 8.0, 16);
+    const fuselageMesh = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
+    fuselageMesh.rotation.x = Math.PI / 2; // Orient horizontally
+    fuselageMesh.castShadow = true;
+    aircraftGroup.add(fuselageMesh);
+    
+    // Engine cowling (front of fuselage)
+    const engineGeometry = new THREE.CylinderGeometry(0.45, 0.4, 1.5, 12);
+    const engineMesh = new THREE.Mesh(engineGeometry, engineMaterial);
+    engineMesh.position.z = 3.75; // Front of aircraft
+    engineMesh.rotation.x = Math.PI / 2;
+    engineMesh.castShadow = true;
+    aircraftGroup.add(engineMesh);
+    
+    // Propeller hub
+    const propHubGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.2, 8);
+    const propHubMesh = new THREE.Mesh(propHubGeometry, engineMaterial);
+    propHubMesh.position.z = 4.7; // At front of engine
+    propHubMesh.rotation.x = Math.PI / 2;
+    aircraftGroup.add(propHubMesh);
+    
+    // Propeller blades (3 blades)
+    for (let i = 0; i < 3; i++) {
+        const bladeGeometry = new THREE.BoxGeometry(0.05, 0.8, 2.0);
+        const bladeMesh = new THREE.Mesh(bladeGeometry, propellerMaterial);
+        bladeMesh.position.z = 4.8;
+        bladeMesh.rotation.z = (i * 2 * Math.PI) / 3; // 120 degrees apart
+        bladeMesh.castShadow = true;
+        aircraftGroup.add(bladeMesh);
+    }
+    
+    // Cockpit canopy
+    const canopyGeometry = new THREE.SphereGeometry(0.35, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    const canopyMesh = new THREE.Mesh(canopyGeometry, windowMaterial);
+    canopyMesh.position.y = 0.2;
+    canopyMesh.position.z = 1.0; // Positioned toward front
+    aircraftGroup.add(canopyMesh);
+    
+    // Left wing
+    const leftWingGeometry = new THREE.BoxGeometry(4.5, 0.1, 1.2);
+    const leftWingMesh = new THREE.Mesh(leftWingGeometry, wingMaterial);
+    leftWingMesh.position.x = -2.8; // Offset to left
+    leftWingMesh.position.z = 0.2; // Slightly behind center
+    leftWingMesh.castShadow = true;
+    aircraftGroup.add(leftWingMesh);
+    
+    // Right wing  
+    const rightWingGeometry = new THREE.BoxGeometry(4.5, 0.1, 1.2);
+    const rightWingMesh = new THREE.Mesh(rightWingGeometry, wingMaterial);
+    rightWingMesh.position.x = 2.8; // Offset to right
+    rightWingMesh.position.z = 0.2; // Slightly behind center
+    rightWingMesh.castShadow = true;
+    aircraftGroup.add(rightWingMesh);
+    
+    // Vertical tail (rudder)
+    const tailGeometry = new THREE.BoxGeometry(0.1, 1.5, 0.8);
+    const tailMesh = new THREE.Mesh(tailGeometry, wingMaterial);
+    tailMesh.position.y = 0.5;
+    tailMesh.position.z = -3.5; // At back of aircraft
+    tailMesh.castShadow = true;
+    aircraftGroup.add(tailMesh);
+    
+    // Horizontal stabilizer (elevator)
+    const stabilizerGeometry = new THREE.BoxGeometry(1.8, 0.05, 0.6);
+    const stabilizerMesh = new THREE.Mesh(stabilizerGeometry, wingMaterial);
+    stabilizerMesh.position.z = -3.2; // At back of aircraft
+    stabilizerMesh.castShadow = true;
+    aircraftGroup.add(stabilizerMesh);
+    
+    // Landing gear (simplified as small boxes)
+    const gearMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+    
+    // Main landing gear (left)
+    const leftGearGeometry = new THREE.BoxGeometry(0.1, 0.4, 0.1);
+    const leftGearMesh = new THREE.Mesh(leftGearGeometry, gearMaterial);
+    leftGearMesh.position.set(-1.0, -0.5, 0.5);
+    aircraftGroup.add(leftGearMesh);
+    
+    // Main landing gear (right)
+    const rightGearGeometry = new THREE.BoxGeometry(0.1, 0.4, 0.1);
+    const rightGearMesh = new THREE.Mesh(rightGearGeometry, gearMaterial);
+    rightGearMesh.position.set(1.0, -0.5, 0.5);
+    aircraftGroup.add(rightGearMesh);
+    
+    // Tail wheel
+    const tailWheelGeometry = new THREE.BoxGeometry(0.05, 0.2, 0.05);
+    const tailWheelMesh = new THREE.Mesh(tailWheelGeometry, gearMaterial);
+    tailWheelMesh.position.set(0, -0.3, -3.0);
+    aircraftGroup.add(tailWheelMesh);
+    
+    // Center point for aircraft control reference
+    const centerPoint = new THREE.Object3D();
+    centerPoint.position.set(0, 0, 0); // At aircraft center
+    aircraftGroup.add(centerPoint);
+    
+    // Scale to appropriate size for game
+    aircraftGroup.scale.set(0.8, 0.8, 0.8);
+    
+    return { model: aircraftGroup, centerPoint };
+}
+
+// Create cloud system for atmospheric effects
+function createCloudSystem(): void {
+    if (!scene) return;
+    
+    const cloudCount = 200; // Increased from 50 to 200 for vast sky coverage
+    
+    for (let i = 0; i < cloudCount; i++) {
+        // Create cloud geometry using multiple spheres for fluffy appearance
+        const cloudGroup = new THREE.Group();
+        
+        // Random number of cloud puffs per cloud (3-7)
+        const puffCount = Math.floor(Math.random() * 5) + 3;
+        
+        for (let j = 0; j < puffCount; j++) {
+            const cloudGeometry = new THREE.SphereGeometry(
+                10 + Math.random() * 15,  // Radius 10-25
+                8,  // Width segments (low poly for performance)
+                6   // Height segments
+            );
+            
+            const cloudMaterial = new THREE.MeshLambertMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.6 + Math.random() * 0.3, // 0.6-0.9 opacity
+                depthWrite: false // Important for proper transparency sorting
+            });
+            
+            const cloudMesh = new THREE.Mesh(cloudGeometry, cloudMaterial);
+            
+            // Position cloud puffs relative to each other
+            cloudMesh.position.set(
+                (Math.random() - 0.5) * 30,
+                (Math.random() - 0.5) * 10,
+                (Math.random() - 0.5) * 30
+            );
+            
+            // Random scale for variety
+            const scale = 0.8 + Math.random() * 0.4; // 0.8-1.2
+            cloudMesh.scale.setScalar(scale);
+            
+            cloudGroup.add(cloudMesh);
+        }
+        
+        // Position cloud group in the sky (expanded range for vast world)
+        cloudGroup.position.set(
+            (Math.random() - 0.5) * 15000, // X: -7500 to 7500 (15km range)
+            80 + Math.random() * 200,      // Y: 80 to 280 (altitude range expanded)
+            (Math.random() - 0.5) * 15000  // Z: -7500 to 7500 (15km range)
+        );
+        
+        // Random rotation
+        cloudGroup.rotation.y = Math.random() * Math.PI * 2;
+        
+        // Add drift velocity for cloud movement
+        (cloudGroup as any).driftVelocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 2,   // Slow drift X
+            0,                           // No vertical drift
+            (Math.random() - 0.5) * 2    // Slow drift Z
+        );
+        
+        clouds.push(cloudGroup as any);
+        scene.add(cloudGroup);
+    }
+}
+
+// Update cloud positions for atmospheric movement
+function updateClouds(delta: number): void {
+    cloudUpdateTime += delta;
+    
+    for (const cloud of clouds) {
+        // Apply drift movement
+        const velocity = (cloud as any).driftVelocity;
+        if (velocity) {
+            cloud.position.add(velocity.clone().multiplyScalar(delta));
+        }
+        
+        // Wrap clouds around the expanded world boundaries
+        if (cloud.position.x > 7500) cloud.position.x = -7500;
+        if (cloud.position.x < -7500) cloud.position.x = 7500;
+        if (cloud.position.z > 7500) cloud.position.z = -7500;
+        if (cloud.position.z < -7500) cloud.position.z = 7500;
+        
+        // Gentle floating motion
+        cloud.position.y += Math.sin(cloudUpdateTime * 0.5 + cloud.position.x * 0.001) * 0.1 * delta;
+    }
+}
+
+// Aircraft machine gun firing system
+function fireAircraftMachineGun(): void {
+    if (!isOnPlane || aircraftAmmo <= 0) return;
+    
+    const currentTime = performance.now();
+    const fireInterval = 60000 / aircraftMachineGunFireRate; // Convert RPM to milliseconds
+    
+    if (currentTime - aircraftLastFireTime < fireInterval) return;
+    
+    aircraftLastFireTime = currentTime;
+    aircraftAmmo--;
+    
+    // Calculate gun position (mounted on aircraft nose)
+    const gunOffset = new THREE.Vector3(0, -0.2, 3.5); // Slightly below and forward of center
+    const gunPosition = planePosition.clone().add(gunOffset.applyQuaternion(planeQuaternion));
+    
+    // Aircraft forward direction for bullet direction
+    const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(planeQuaternion);
+    
+    // Create machine gun projectile
+    const projectileGeometry = new THREE.SphereGeometry(0.02, 4, 4); // Small bullet
+    const projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xFFD700 }); // Gold color
+    const projectileMesh = new THREE.Mesh(projectileGeometry, projectileMaterial);
+    
+    projectileMesh.position.copy(gunPosition);
+    scene.add(projectileMesh);
+    
+    // High-velocity machine gun projectile
+    const projectileSpeed = 800.0; // Very fast machine gun rounds
+    const projectileVelocity = forwardDir.clone().multiplyScalar(projectileSpeed);
+    
+    // Add to projectiles array for tracking
+    const projectile: Projectile = {
+        mesh: projectileMesh,
+        velocity: projectileVelocity,
+        lifeTime: 3000, // 3 seconds flight time
+        spawnTime: currentTime,
+        weaponType: 'smg', // Use SMG stats for damage
+        distanceTraveled: 0,
+        initialPosition: gunPosition.clone()
+    };
+    
+    projectiles.push(projectile);
+    
+    // Simple muzzle flash effect (particle spark)
+    const flashGeometry = new THREE.SphereGeometry(0.1, 4, 4);
+    const flashMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+    const flash = new THREE.Mesh(flashGeometry, flashMaterial);
+    flash.position.copy(gunPosition);
+    scene.add(flash);
+    
+    // Remove flash after short time
+    setTimeout(() => {
+        scene.remove(flash);
+        flashGeometry.dispose();
+        flashMaterial.dispose();
+    }, 50);
+}
+
 
 function populateWeaponStatsDB() {
     weaponStatsDB = {
@@ -4083,6 +4515,88 @@ function toggleBike() {
     }
 }
 
+function togglePlane() {
+    if (!controls || !controls.isLocked || isGameOver) {
+        return;
+    }
+    
+    // Cannot be on bike and plane at same time
+    if (isOnBike) {
+        showTemporaryMessage("Cannot enter aircraft while on bike!", 500);
+        return;
+    }
+    
+    isOnPlane = !isOnPlane;
+    (window as any).isOnPlane = isOnPlane;
+    
+    if (isOnPlane) {
+        // Initialize plane position to current player position
+        const playerObject = controls.getObject();
+        planePosition.copy(playerObject.position);
+        planePosition.y += 10; // Start at altitude
+        
+        // Initialize plane orientation
+        planeQuaternion.setFromEuler(new THREE.Euler(0, playerObject.rotation.y, 0));
+        
+        // Initialize velocity - forward flying speed
+        planeVelocity.set(0, 0, 50); // 50 m/s forward (matching model)
+        planeVelocity.applyQuaternion(planeQuaternion);
+        
+        // Reset angular velocity
+        planeAngularVelocity.set(0, 0, 0);
+        
+        // Reset control inputs
+        planeControlInputs.pitch = 0;
+        planeControlInputs.roll = 0;
+        planeControlInputs.yaw = 0;
+        planeControlInputs.throttle = 0.5; // Start at 50% throttle
+        
+        // Show plane model
+        if (planeModel) {
+            planeModel.visible = true;
+            planeModel.position.copy(planePosition);
+            planeModel.quaternion.copy(planeQuaternion);
+        }
+        
+        // Reset aircraft controls
+        planePitchUpActual = false;
+        planePitchDownActual = false;
+        planeRollLeftActual = false;
+        planeRollRightActual = false;
+        planeYawLeftActual = false;
+        planeYawRightActual = false;
+        planeThrottleUpActual = false;
+        planeThrottleDownActual = false;
+        
+        showTemporaryMessage("Aircraft ON - WASD: Pitch/Roll, QE: Yaw, ZX: Throttle", 1000);
+    } else {
+        // Hide plane model
+        if (planeModel) {
+            planeModel.visible = false;
+        }
+        
+        // Reset all aircraft controls
+        planePitchUpActual = false;
+        planePitchDownActual = false;
+        planeRollLeftActual = false;
+        planeRollRightActual = false;
+        planeYawLeftActual = false;
+        planeYawRightActual = false;
+        planeThrottleUpActual = false;
+        planeThrottleDownActual = false;
+        
+        // Reset camera rotation
+        if (controls && pitchObject) {
+            pitchObject.rotation.x = 0;
+        }
+        
+        // Re-equip current weapon to make it visible again
+        equipWeapon(currentEquippedWeapon);
+        
+        showTemporaryMessage("Aircraft OFF", 500);
+    }
+}
+
 function startReload() {
     if (isReloading || isGameOver) return;
     
@@ -4229,6 +4743,15 @@ function initThreeJSGame() {
   
   // Create bike model (initially hidden)
   recreateBikeModel();
+  
+  // Create Zero fighter aircraft model (initially hidden)
+  const planeData = createZeroFighterModel();
+  planeModel = planeData.model;
+  planeModel.visible = false; // Start hidden
+  scene.add(planeModel);
+  
+  // Create cloud system
+  createCloudSystem();
   
   populateWeaponStatsDB(); 
   equipWeapon('handgun'); 
@@ -6268,31 +6791,59 @@ function onKeyDown(event: KeyboardEvent) {
   if (!controls || !controls.isLocked || isGameOver) return;
   switch (event.code) {
     case 'KeyW': case 'ArrowUp': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planePitchUpActual = true);
+      } else if (isOnBike) {
         queueInput(() => bikeAccelerateActual = true);
       } else {
         queueInput(() => moveForwardActual = true);
       }
       break;
     case 'KeyA': case 'ArrowLeft': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planeRollLeftActual = true);
+      } else if (isOnBike) {
         queueInput(() => bikeTurnLeftActual = true);
       } else {
         queueInput(() => moveLeftActual = true);
       }
       break;
     case 'KeyS': case 'ArrowDown': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planePitchDownActual = true);
+      } else if (isOnBike) {
         queueInput(() => bikeDecelerateActual = true);
       } else {
         queueInput(() => moveBackwardActual = true);
       }
       break;
     case 'KeyD': case 'ArrowRight': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planeRollRightActual = true);
+      } else if (isOnBike) {
         queueInput(() => bikeTurnRightActual = true);
       } else {
         queueInput(() => moveRightActual = true);
+      }
+      break;
+    case 'KeyQ': 
+      if (isOnPlane) {
+        queueInput(() => planeYawLeftActual = true);
+      }
+      break;
+    case 'KeyE': 
+      if (isOnPlane) {
+        queueInput(() => planeYawRightActual = true);
+      }
+      break;
+    case 'KeyZ': 
+      if (isOnPlane) {
+        queueInput(() => planeThrottleDownActual = true);
+      }
+      break;
+    case 'KeyX': 
+      if (isOnPlane) {
+        queueInput(() => planeThrottleUpActual = true);
       }
       break;
     case 'ShiftLeft': queueInput(() => isAimingWithKeyActual = true); break;
@@ -6308,6 +6859,7 @@ function onKeyDown(event: KeyboardEvent) {
     case 'PageUp': queueInput(() => adjustZeroing(25)); break; // Increase zeroing distance
     case 'PageDown': queueInput(() => adjustZeroing(-25)); break; // Decrease zeroing distance
     case 'KeyV': queueInput(() => toggleBike()); break; // Toggle bike on/off
+    case 'KeyF': queueInput(() => togglePlane()); break; // Toggle aircraft on/off
   }
 }
 function onKeyUp(event: KeyboardEvent) { 
@@ -6317,31 +6869,59 @@ function onKeyUp(event: KeyboardEvent) {
   }
   switch (event.code) {
     case 'KeyW': case 'ArrowUp': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planePitchUpActual = false);
+      } else if (isOnBike) {
         queueInput(() => bikeAccelerateActual = false);
       } else {
         queueInput(() => moveForwardActual = false);
       }
       break;
     case 'KeyA': case 'ArrowLeft': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planeRollLeftActual = false);
+      } else if (isOnBike) {
         queueInput(() => bikeTurnLeftActual = false);
       } else {
         queueInput(() => moveLeftActual = false);
       }
       break;
     case 'KeyS': case 'ArrowDown': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planePitchDownActual = false);
+      } else if (isOnBike) {
         queueInput(() => bikeDecelerateActual = false);
       } else {
         queueInput(() => moveBackwardActual = false);
       }
       break;
     case 'KeyD': case 'ArrowRight': 
-      if (isOnBike) {
+      if (isOnPlane) {
+        queueInput(() => planeRollRightActual = false);
+      } else if (isOnBike) {
         queueInput(() => bikeTurnRightActual = false);
       } else {
         queueInput(() => moveRightActual = false);
+      }
+      break;
+    case 'KeyQ': 
+      if (isOnPlane) {
+        queueInput(() => planeYawLeftActual = false);
+      }
+      break;
+    case 'KeyE': 
+      if (isOnPlane) {
+        queueInput(() => planeYawRightActual = false);
+      }
+      break;
+    case 'KeyZ': 
+      if (isOnPlane) {
+        queueInput(() => planeThrottleDownActual = false);
+      }
+      break;
+    case 'KeyX': 
+      if (isOnPlane) {
+        queueInput(() => planeThrottleUpActual = false);
       }
       break;
     case 'ShiftLeft': queueInput(() => isAimingWithKeyActual = false); break;
@@ -6351,6 +6931,14 @@ function onMouseDown(event: MouseEvent) {
   if (!controls || !controls.isLocked || isGameOver || !prng) return;
   
   if (event.button === 0) { // Left click
+    // Aircraft machine gun firing
+    if (isOnPlane) {
+        // Start continuous firing aircraft machine gun
+        isFiringAircraftGunActual = true;
+        fireAircraftMachineGun(); // Fire first shot immediately
+        return;
+    }
+    
     if (currentEquippedWeapon === 'smg') {
         isFiringSMGActual = true;
         // The first shot will be handled by the animate loop's SMG firing logic
@@ -6415,6 +7003,9 @@ function onMouseUp(event: MouseEvent) {
   if (event.button === 0) { // Left click up
     if (isFiringSMGActual) {
         isFiringSMGActual = false;
+    }
+    if (isFiringAircraftGunActual) {
+        isFiringAircraftGunActual = false;
     }
   } else if (event.button === 2) { // Right click up
     queueInput(() => isAimingWithMouseActual = false);
@@ -7263,6 +7854,11 @@ function animate() {
     // Adjust mouse sensitivity based on scope zoom
     controls.sensitivity = 0.002 * mouseSensitivity * getMouseSensitivityMultiplier();
 
+    // Aircraft Machine Gun Full Auto Fire Logic
+    if (isFiringAircraftGunActual && isOnPlane && !isGameOver) {
+        fireAircraftMachineGun();
+    }
+
     // SMG Full Auto Fire Logic
     if (isFiringSMGActual && currentEquippedWeapon === 'smg' && !isGameOver && prng) {
         const smgStats = weaponStatsDB.smg;
@@ -7466,8 +8062,314 @@ function animate() {
         }
     }
     
-    // Cap maximum horizontal speed (applies to both walking and bike modes)
-    if (!isOnBike) {
+    if (isOnPlane) {
+        // Zero Fighter Aircraft Physics System
+        
+        // Update control inputs based on user input
+        planeControlInputs.pitch = 0;
+        planeControlInputs.roll = 0;
+        planeControlInputs.yaw = 0;
+        
+        if (planePitchUpActual) planeControlInputs.pitch += 1.5;
+        if (planePitchDownActual) planeControlInputs.pitch -= 1.5;
+        if (planeRollLeftActual) planeControlInputs.roll -= 1.0;
+        if (planeRollRightActual) planeControlInputs.roll += 1.0;
+        
+        // QE for coordinated turns (automatic roll + yaw combination)
+        if (planeYawLeftActual) {
+            planeControlInputs.roll -= 0.8;  // Strong roll input
+            planeControlInputs.yaw -= 0.3;   // Supporting yaw
+            planeControlInputs.pitch += 0.2; // Slight pitch up to maintain altitude
+        }
+        if (planeYawRightActual) {
+            planeControlInputs.roll += 0.8;  // Strong roll input
+            planeControlInputs.yaw += 0.3;   // Supporting yaw
+            planeControlInputs.pitch += 0.2; // Slight pitch up to maintain altitude
+        }
+        
+        // Update throttle
+        if (planeThrottleUpActual) {
+            planeControlInputs.throttle = Math.min(1.0, planeControlInputs.throttle + 2.0 * delta);
+        }
+        if (planeThrottleDownActual) {
+            planeControlInputs.throttle = Math.max(0.0, planeControlInputs.throttle - 2.0 * delta);
+        }
+        
+        // Calculate air density at current altitude (simple model)
+        const altitude = planePosition.y;
+        const airDensity = AIR_DENSITY * Math.pow(1 - altitude * 0.0065 / 288.15, 4.255); // ISA atmosphere model
+        
+        // Realistic throttle and thrust calculation
+        planeCurrentThrust = planeControlInputs.throttle;
+        const thrustForce = planeCurrentThrust * planeMaxThrust;
+        
+        // Calculate aircraft orientation vectors
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(planeQuaternion);
+        const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(planeQuaternion);
+        
+        // Calculate airspeed and relative wind
+        const airspeed = planeVelocity.length();
+        const velocityDir = airspeed > 0.1 ? planeVelocity.clone().normalize() : forwardDir.clone();
+        
+        // Calculate angle of attack (AOA) - angle between aircraft longitudinal axis and relative wind
+        const relativeWind = velocityDir.clone().multiplyScalar(-1); // Wind comes from opposite direction
+        const aoaRadians = Math.acos(Math.max(-1, Math.min(1, forwardDir.dot(relativeWind))));
+        const aoaDegrees = THREE.MathUtils.radToDeg(aoaRadians);
+        
+        // Critical angle of attack for Zero fighter (realistic stall characteristics)
+        const criticalAOA = 18; // degrees
+        const stallAOA = 20; // degrees
+        
+        // Realistic lift coefficient calculation based on AOA
+        let liftCoefficient = 0;
+        if (aoaDegrees <= criticalAOA) {
+            // Linear region: Cl = Cl_alpha * alpha + Cl_0
+            liftCoefficient = 0.15 * aoaDegrees + 0.4; // Increased base lift for better performance
+        } else if (aoaDegrees <= stallAOA) {
+            // Near stall: reduced effectiveness
+            const stallFactor = (stallAOA - aoaDegrees) / (stallAOA - criticalAOA);
+            liftCoefficient = (0.15 * criticalAOA + 0.4) * stallFactor;
+        } else {
+            // Post-stall: dramatic lift loss
+            liftCoefficient = 0.5 * Math.cos(THREE.MathUtils.degToRad(aoaDegrees - stallAOA));
+            liftCoefficient = Math.max(liftCoefficient, 0.2); // Minimum lift
+        }
+        
+        // Ensure minimum lift for basic flight
+        liftCoefficient = Math.max(liftCoefficient, 0.1);
+        
+        // Dynamic pressure calculation
+        const dynamicPressure = 0.5 * airDensity * airspeed * airspeed;
+        
+        // Lift force calculation (perpendicular to relative wind, in aircraft's up direction)
+        const liftMagnitude = liftCoefficient * dynamicPressure * planeWingArea;
+        
+        // Aircraft's local up direction (Y-axis in aircraft coordinates)
+        const aircraftUpDir = new THREE.Vector3(0, 1, 0).applyQuaternion(planeQuaternion);
+        
+        // Get the component of aircraft up direction that's perpendicular to velocity
+        const velocityNormalized = velocityDir.clone().normalize();
+        const velocityDotUp = velocityNormalized.dot(aircraftUpDir);
+        const liftDirection = aircraftUpDir.clone().sub(velocityNormalized.clone().multiplyScalar(velocityDotUp)).normalize();
+        
+        // If the aircraft is moving straight up/down, use the aircraft's up direction
+        if (liftDirection.length() < 0.1) {
+            liftDirection.copy(aircraftUpDir);
+        }
+        
+        const liftForce = liftDirection.multiplyScalar(liftMagnitude);
+        
+        // Realistic drag calculation (includes induced drag)
+        const parasiteDragCoeff = 0.025; // Zero's clean configuration
+        const inducedDragCoeff = (liftCoefficient * liftCoefficient) / (Math.PI * 7.0); // Aspect ratio ≈ 7
+        const totalDragCoeff = parasiteDragCoeff + inducedDragCoeff;
+        const dragMagnitude = totalDragCoeff * dynamicPressure * planeWingArea;
+        const dragForce = velocityDir.clone().multiplyScalar(-dragMagnitude);
+        
+        // Apply all forces
+        const forces = new THREE.Vector3();
+        
+        // Thrust (only when throttle > 0)
+        if (planeCurrentThrust > 0) {
+            forces.add(forwardDir.clone().multiplyScalar(thrustForce));
+        }
+        
+        // Lift (realistic direction)
+        forces.add(liftForce);
+        
+        // Drag (always opposes motion)
+        forces.add(dragForce);
+        
+        // Weight (gravity)
+        forces.add(new THREE.Vector3(0, -AIRCRAFT_GRAVITY * planeMass, 0));
+        
+        // Calculate linear acceleration (F = ma)
+        const acceleration = forces.divideScalar(planeMass);
+        
+        // Update velocity
+        planeVelocity.add(acceleration.multiplyScalar(delta));
+        
+        // Realistic angular dynamics (control effectiveness depends on airspeed)
+        const controlEffectiveness = Math.min(airspeed / 30.0, 1.0); // Full effectiveness at 30+ m/s
+        
+        // Calculate moments (torques) - enhanced for better maneuverability
+        const pitchMoment = planeControlInputs.pitch * controlEffectiveness * 120000.0; // Elevator (increased for stronger pitch)
+        const rollMoment = planeControlInputs.roll * controlEffectiveness * 180000.0;   // Ailerons (increased for better turning)
+        const yawMoment = planeControlInputs.yaw * controlEffectiveness * 120000.0;     // Rudder (increased for coordinated turns)
+        
+        // Moment of inertia (optimized for maneuverability)
+        const Ixx = 6000.0;   // Roll inertia (reduced for faster roll response)
+        const Iyy = 10000.0;  // Pitch inertia (reduced for faster pitch response)
+        const Izz = 12000.0;  // Yaw inertia (reduced for better turn coordination)
+        
+        // Calculate angular accelerations (τ = Iα)
+        const pitchAccel = pitchMoment / Iyy;
+        const rollAccel = rollMoment / Ixx;
+        const yawAccel = yawMoment / Izz;
+        
+        // Update angular velocities
+        planeAngularVelocity.x += pitchAccel * delta; // Pitch
+        planeAngularVelocity.z += rollAccel * delta;  // Roll
+        planeAngularVelocity.y += yawAccel * delta;   // Yaw
+        
+        // Realistic aerodynamic damping (depends on airspeed)
+        const dampingFactor = 0.92 - (airspeed * 0.002); // Stronger damping at higher speeds
+        planeAngularVelocity.multiplyScalar(Math.max(dampingFactor, 0.75));
+        
+        // Update position
+        planePosition.add(planeVelocity.clone().multiplyScalar(delta));
+        
+        // Update orientation using quaternions
+        const deltaQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            planeAngularVelocity.x * delta,
+            planeAngularVelocity.y * delta, 
+            planeAngularVelocity.z * delta
+        ));
+        planeQuaternion.multiplyQuaternions(planeQuaternion, deltaQuat);
+        planeQuaternion.normalize();
+        
+        // Update plane model position and rotation
+        if (planeModel && planeModel.visible) {
+            planeModel.position.copy(planePosition);
+            planeModel.quaternion.copy(planeQuaternion);
+        }
+        
+        // Aircraft camera system with third-person view option
+        const playerObject = controls.getObject();
+        
+        // Check if aiming (Right Click or Left Shift for first-person cockpit view)
+        const isAimingInAircraft = isAimingWithMouseActual || isAimingWithKeyActual;
+        
+        if (isAimingInAircraft) {
+            // First-person cockpit view when aiming
+            const cockpitOffset = new THREE.Vector3(0, 0.5, 1.0).applyQuaternion(planeQuaternion);
+            playerObject.position.copy(planePosition.clone().add(cockpitOffset));
+            
+            // Align camera with aircraft orientation (fixed view)
+            const cameraQuaternion = planeQuaternion.clone();
+            const flipQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+            cameraQuaternion.multiply(flipQuaternion);
+            playerObject.quaternion.copy(cameraQuaternion);
+        } else {
+            // Third-person chase camera for general flying
+            const chaseDistance = 25; // Distance behind aircraft
+            const chaseHeight = 8;    // Height above aircraft
+            
+            // Calculate chase camera position (behind and above aircraft)
+            const backwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(planeQuaternion);
+            const upwardDir = new THREE.Vector3(0, 1, 0);
+            
+            const chasePosition = planePosition.clone()
+                .add(backwardDir.multiplyScalar(chaseDistance))
+                .add(upwardDir.multiplyScalar(chaseHeight));
+            
+            playerObject.position.copy(chasePosition);
+            
+            // Look at the aircraft from chase position
+            const lookAtTarget = planePosition.clone().add(new THREE.Vector3(0, 2, 0)); // Slightly above aircraft center
+            playerObject.lookAt(lookAtTarget);
+        }
+        
+        // Legacy pitch object support
+        const targetRotation = new THREE.Euler().setFromQuaternion(planeQuaternion);
+        if (pitchObject) {
+            pitchObject.rotation.x = targetRotation.x;
+        }
+        
+        // Stall warning and characteristics
+        const stallSpeed = 22.0; // m/s (realistic Zero stall speed)
+        if (airspeed < stallSpeed) {
+            // Aircraft becomes uncontrollable in stall
+            const stallSeverity = (stallSpeed - airspeed) / stallSpeed;
+            
+            // Reduce control effectiveness severely
+            planeAngularVelocity.multiplyScalar(1.0 - stallSeverity * 0.8);
+            
+            // Random buffeting in stall
+            if (Math.random() < stallSeverity * 0.1) {
+                planeAngularVelocity.x += (Math.random() - 0.5) * stallSeverity * 0.2;
+                planeAngularVelocity.z += (Math.random() - 0.5) * stallSeverity * 0.1;
+            }
+            
+            // Show stall warning
+            if (stallSeverity > 0.5) {
+                // This would show a stall warning in the UI
+                console.log('STALL WARNING - Airspeed too low!');
+            }
+        }
+        
+        // Ground effect (increased lift near ground)
+        if (planePosition.y < 20.0) {
+            const groundEffectFactor = 1.0 + (20.0 - planePosition.y) / 20.0 * 0.15;
+            liftForce.multiplyScalar(groundEffectFactor);
+        }
+        
+        // Ground operations with landing gear
+        const groundHeight = 2.0;
+        const isOnGround = planePosition.y <= groundHeight + 0.1; // Very small tolerance for actual ground contact
+        
+        if (planePosition.y <= groundHeight) {
+            planePosition.y = groundHeight;
+            
+            // Hard landing/crash effects (only for dangerous impacts)
+            if (Math.abs(planeVelocity.y) > 15.0 || (Math.abs(planeVelocity.y) > 8.0 && airspeed > 60.0)) {
+                console.log('CRASH LANDING!');
+                // Could trigger crash sequence here
+            }
+            
+            // Ground operations with landing gear (only when truly on ground)
+            if (isOnGround && planePosition.y <= groundHeight + 0.05) {
+                // Zero vertical velocity when on ground
+                planeVelocity.y = Math.max(0, planeVelocity.y);
+                
+                // Ground taxiing with landing gear
+                if (planeCurrentThrust > 0) {
+                    // Extremely powerful ground acceleration for takeoff
+                    const groundTaxiEffectiveness = 3.0; // Very high effectiveness for fast takeoff
+                    const taxiThrust = planeCurrentThrust * planeMaxThrust * groundTaxiEffectiveness;
+                    
+                    // Apply forward thrust for ground movement
+                    const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(planeQuaternion);
+                    const taxiAcceleration = forwardDir.clone().multiplyScalar(taxiThrust / planeMass);
+                    planeVelocity.add(taxiAcceleration.multiplyScalar(delta));
+                }
+                
+                // Minimal ground friction for smooth movement
+                const groundFriction = 0.995; // Almost no friction - very smooth ground
+                planeVelocity.x *= groundFriction;
+                planeVelocity.z *= groundFriction;
+                
+                // Allow steering on ground with rudder
+                if (Math.abs(planeControlInputs.yaw) > 0.1) {
+                    const groundSteeringRate = planeControlInputs.yaw * 1.0; // Steering effectiveness
+                    const yawChange = groundSteeringRate * delta;
+                    const yawQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yawChange);
+                    planeQuaternion.multiplyQuaternions(planeQuaternion, yawQuaternion);
+                    planeQuaternion.normalize();
+                }
+                
+                // Prevent pitch and roll changes on ground (keep level)
+                const euler = new THREE.Euler().setFromQuaternion(planeQuaternion);
+                euler.x = Math.max(-0.1, Math.min(0.1, euler.x)); // Limit pitch
+                euler.z = Math.max(-0.05, Math.min(0.05, euler.z)); // Limit roll
+                planeQuaternion.setFromEuler(euler);
+                
+                // Reduce angular velocities on ground
+                planeAngularVelocity.x *= 0.8; // Dampen pitch
+                planeAngularVelocity.z *= 0.8; // Dampen roll
+                planeAngularVelocity.y *= 0.9; // Allow some yaw for steering
+                
+            } else {
+                // Normal ground collision for hard landings
+                planeVelocity.y = Math.max(0, planeVelocity.y * -0.3); // Bounce with energy loss
+                planeVelocity.x *= 0.8; // Ground friction
+                planeVelocity.z *= 0.8;
+            }
+        }
+    }
+    
+    // Cap maximum horizontal speed (applies to walking mode only)
+    if (!isOnBike && !isOnPlane) {
     const maxSpeed = currentSpeed * 1.2;
     const currentHorizontalSpeed = Math.sqrt(horizontalVelocity.x * horizontalVelocity.x + horizontalVelocity.z * horizontalVelocity.z);
     if (currentHorizontalSpeed > maxSpeed) {
@@ -7626,6 +8528,9 @@ function animate() {
   updateProjectiles(delta);
   if (gameMode === 'multiplayer') updateRemoteProjectiles(delta);
   
+  // Update cloud system for atmospheric effects
+  updateClouds(delta);
+  
   // Update zombie system for single player
   if (gameMode === 'singleplayer') {
     updateZombies(delta);
@@ -7654,6 +8559,7 @@ function animate() {
   updateHealthDisplay();
   updateSpeedIndicator(); // Update bike speed indicator
   updateBikeDurabilityIndicator(); // Update bike durability indicator
+  updateAircraftHUD(); // Update aircraft cockpit HUD
   updatePlayerIdLabels(); // Update player ID labels orientation
 
   renderer.render(scene, camera);

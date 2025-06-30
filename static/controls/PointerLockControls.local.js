@@ -118,6 +118,9 @@ class PointerLockControls extends EventDispatcher {
 function onMouseMove( event ) {
 
 	if ( this.isLocked === false ) return;
+	
+	// Disable mouse look when in aircraft mode
+	if ( window.isOnPlane && window.isOnPlane === true ) return;
 
 	const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
 	const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
