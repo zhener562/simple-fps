@@ -1,4 +1,4 @@
 name = "fps"
 
 [build]
-assets = ["all-about-shinji/dist/*", "static/dist/*"]
+assets = ["static/all-about-shinji/dist/*", "static/simple-fps/dist/*"]

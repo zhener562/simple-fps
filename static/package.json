@@ -1,24 +1,12 @@
 {
-  "name": "simple-fps-game",
+  "name": "static-root",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "workspaces": [
+    "./simple-fps",
+    "./all-about-shinji"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build && npm run copy-assets",
-    "copy-assets": "mkdir -p dist/assets && cp -r assets/* dist/assets/",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@google/genai": "^1.2.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "three": "0.160.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/three": "^0.177.0",
-    "typescript": "~5.7.2",
-    "vite": "^6.2.0"
+    "build": "npm run build -ws"
   }
 }
