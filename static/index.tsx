@@ -134,11 +134,13 @@ let bikeCollisionCooldown = 100; // ms between collision checks to prevent spam
 function createBikeExplosion(position?: THREE.Vector3, enableCameraShake: boolean = true): void {
     if (!scene) return;
     
+    console.log('🔥 BIKE EXPLOSION TRIGGERED! 🔥');
+    
     // Use provided position or default to bike position
     const explosionPosition = position || bikePosition.clone();
     
     // Create explosion particles
-    const particleCount = enableCameraShake ? 50 : 40; // More particles for local explosion
+    const particleCount = enableCameraShake ? 80 : 60; // More particles for spectacular explosion
     const particles: THREE.Mesh[] = [];
     
     for (let i = 0; i < particleCount; i++) {
@@ -152,11 +154,11 @@ function createBikeExplosion(position?: THREE.Vector3, enableCameraShake: boolea
         particle.position.copy(explosionPosition);
         particle.position.y += Math.random() * 2;
         
-        // Random velocity
+        // Random velocity - bigger explosion
         const velocity = new THREE.Vector3(
-            (Math.random() - 0.5) * 20,
-            Math.random() * 15 + 5,
-            (Math.random() - 0.5) * 20
+            (Math.random() - 0.5) * 30,
+            Math.random() * 20 + 8,
+            (Math.random() - 0.5) * 30
         );
         (particle as any).velocity = velocity;
         (particle as any).life = 2.0; // 2 seconds lifetime
@@ -2645,7 +2647,7 @@ function updateRemotePlayerBikeForPlayer(playerId: string, state: PlayerState) {
         // Position player on bike (similar to bike position but slightly elevated)
         const playerOnBikePos = {
             x: bikePos.x,
-            y: bikeY + 1.5, // Elevate player above bike
+            y: bikeY + 0.7, // Proper seat height on bike
             z: bikePos.z
         };
         meshes.mainMesh.position.set(playerOnBikePos.x, playerOnBikePos.y, playerOnBikePos.z);
