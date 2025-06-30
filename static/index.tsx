@@ -68,7 +68,7 @@ interface Projectile {
   velocity: THREE.Vector3;
   lifeTime: number;
   spawnTime: number;
-  weaponType: 'handgun' | 'sniper' | 'smg'; // To know which stats to use
+  weaponType: 'handgun' | 'sniper' | 'smg' | 'spear'; // To know which stats to use
   distanceTraveled: number; // Distance traveled in meters for ballistic calculations
   initialPosition: THREE.Vector3; // Starting position for distance calculation
 }
@@ -122,7 +122,7 @@ let bikeBrakingForce = 12000.0; // Racing-grade brakes (extremely powerful)
 let bikeTurnSpeed = 4.0;
 let bikeDirection = 0; // Bike facing direction in radians
 let bikePosition = new THREE.Vector3();
-let bikeCanUseWeapons: string[] = ['handgun', 'smg']; // Only handgun and SMG allowed on bike
+let bikeCanUseWeapons: string[] = ['handgun', 'smg', 'spear']; // Only handgun, SMG, and spear allowed on bike
 
 // Bike damage and collision system
 let bikeHealth = 100.0; // Maximum bike durability
@@ -443,6 +443,8 @@ let sniperRifleModel: THREE.Group;
 let sniperMuzzlePoint: THREE.Object3D;
 let smgModel: THREE.Group;
 let smgMuzzlePoint: THREE.Object3D;
+let spearModel: THREE.Group;
+let spearTipPoint: THREE.Object3D;
 
 const raycaster = new THREE.Raycaster(); // Still used for ground detection, potentially other things
 
@@ -453,6 +455,8 @@ interface WeaponStats {
     adsPosition: THREE.Vector3;
     hipRotation: THREE.Euler;
     adsRotation: THREE.Euler;
+    hipQuaternion?: THREE.Quaternion;
+    adsQuaternion?: THREE.Quaternion;
     adsFov: number;
     recoilAmount: THREE.Vector3; // x: max random sideways positional kick, y: (sniper ADS: camera pitch radians) OR (other: model vertical positional kick), z: model backward positional kick
     recoilDuration: number;
@@ -470,6 +474,9 @@ interface WeaponStats {
     zeroingDistance?: number; // Zeroing distance in meters (for sniper rifles)
     ballisticCoefficient?: number; // Ballistic coefficient (G1 standard)
     airDensity?: number; // Air density (kg/m³, default 1.225)
+    // Spear-specific properties
+    thrustRange?: number; // Thrust attack range in meters
+    thrustSpeed?: number; // Base thrust speed for damage calculation
 }
 
 let weaponStatsDB: Record<string, Partial<WeaponStats>> = {}; // Will be populated after models are created
@@ -559,7 +566,7 @@ function getMouseSensitivityMultiplier(): number {
     return 1.0; // Normal sensitivity for non-scoped or other weapons
 }
 
-let currentEquippedWeapon: 'handgun' | 'sniper' | 'smg' = 'handgun';
+let currentEquippedWeapon: 'handgun' | 'sniper' | 'smg' | 'spear' = 'handgun';
 let lastFireTime = 0;
 let currentAmmo: Record<string, number> = {}; // Current ammo for each weapon
 let sniperZeroingDistance = 100; // Current zeroing distance for sniper rifle (meters)
@@ -572,6 +579,11 @@ let activeWeaponRecoilOffset = new THREE.Vector3(); // Current positional recoil
 let cameraPitchRecoil = 0; // Current camera pitch recoil value (radians)
 let isWeaponRecoiling = false;
 let weaponRecoilTime = 0;
+
+// Spear thrust animation state
+let isSpearThrusting = false;
+let spearThrustTime = 0;
+let spearThrustOffset = new THREE.Vector3(0, 0, 0);
 
 
 let gameMode: 'idle' | 'singleplayer' | 'multiplayer' = 'idle';
@@ -1779,7 +1791,7 @@ interface PlayerState {
   position: { x: number; y: number; z: number };
   quaternion: { x: number; y: number; z: number; w: number };
   aiming: boolean;
-  weaponType: 'handgun' | 'sniper' | 'smg';
+  weaponType: 'handgun' | 'sniper' | 'smg' | 'spear';
   isOnBike: boolean;
   bikeDirection?: number;
   bikeBankAngle?: number;
@@ -1789,7 +1801,7 @@ interface PlayerState {
 interface GameEventShootData {
     muzzlePosition: { x: number; y: number; z: number };
     direction: { x: number; y: number; z: number };
-    weaponType: 'handgun' | 'sniper' | 'smg';
+    weaponType: 'handgun' | 'sniper' | 'smg' | 'spear';
 }
 
 interface GameEventHitOpponentData {
@@ -2494,7 +2506,7 @@ function updateLegacyRemotePlayerVariables() {
 }
 
 // Update weapon display for a specific remote player
-function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, weaponType: 'handgun' | 'sniper' | 'smg') {
+function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, weaponType: 'handgun' | 'sniper' | 'smg' | 'spear') {
     const meshes = remotePlayerMeshes.get(playerId);
     if (!meshes) return;
     
@@ -3345,6 +3357,7 @@ function resetGameScene() {
     
     equipWeapon('handgun'); 
     isWeaponRecoiling = false; weaponRecoilTime = 0; activeWeaponRecoilOffset.set(0,0,0); cameraPitchRecoil = 0;
+    isSpearThrusting = false; spearThrustTime = 0; spearThrustOffset.set(0,0,0);
     camera.fov = NORMAL_FOV; camera.updateProjectionMatrix();
     if (scopeOverlay) scopeOverlay.style.display = 'none';
 
@@ -3629,6 +3642,44 @@ function createSMGModel(): { model: THREE.Group, muzzlePoint: THREE.Object3D } {
     return { model: smgGrp, muzzlePoint: muzzle };
 }
 
+function createSpearModel(): { model: THREE.Group; tipPoint: THREE.Object3D } {
+    const spearGroup = new THREE.Group();
+    
+    // Spear materials
+    const shaftMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown wood
+    const tipMaterial = new THREE.MeshLambertMaterial({ color: 0xC0C0C0 }); // Silver metal
+    
+    // Shaft (long wooden pole)
+    const shaftGeometry = new THREE.CylinderGeometry(0.015, 0.015, 2.0, 8);
+    const shaftMesh = new THREE.Mesh(shaftGeometry, shaftMaterial);
+    shaftMesh.castShadow = true;
+    spearGroup.add(shaftMesh);
+    
+    // Spear tip (metal point)
+    const tipGeometry = new THREE.ConeGeometry(0.03, 0.2, 8);
+    const tipMesh = new THREE.Mesh(tipGeometry, tipMaterial);
+    tipMesh.position.y = 1.1; // At the top of the shaft
+    tipMesh.castShadow = true;
+    spearGroup.add(tipMesh);
+    
+    // Binding near the tip for detail
+    const bindingGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.05, 8);
+    const bindingMesh = new THREE.Mesh(bindingGeometry, tipMaterial);
+    bindingMesh.position.y = 0.9;
+    spearGroup.add(bindingMesh);
+    
+    // Tip point for collision detection
+    const tipPoint = new THREE.Object3D();
+    tipPoint.position.set(0, 1.2, 0); // At the very tip
+    spearGroup.add(tipPoint);
+    
+    // Scale and position for first-person view
+    spearGroup.scale.set(0.8, 0.8, 0.8);
+    spearGroup.rotation.z = Math.PI / 6; // Slight angle
+    
+    return { model: spearGroup, tipPoint };
+}
+
 
 function populateWeaponStatsDB() {
     weaponStatsDB = {
@@ -3694,6 +3745,27 @@ function populateWeaponStatsDB() {
             reloadTime: 1000,
             ballisticCoefficient: 0.18, // SMG bullet BC
             airDensity: 1.225,
+        },
+        spear: {
+            hipPosition: new THREE.Vector3(0.8, -0.2, -0.4),
+            adsPosition: new THREE.Vector3(0.0, -0.1, -0.3),
+            hipRotation: new THREE.Euler(0, 0, 0),
+            adsRotation: new THREE.Euler(0, 0, 0),
+            hipQuaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 4, -Math.PI / 8, 0)),
+            adsQuaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)),
+            adsFov: 65,
+            recoilAmount: new THREE.Vector3(0, 0, 0), // No recoil for melee
+            recoilDuration: 0,
+            recoilReturnSpeed: 0,
+            fireRate: 300, // Faster attack cooldown
+            projectileSpeed: 0, // Melee weapon
+            model: spearModel,
+            muzzlePoint: spearTipPoint,
+            damage: 200, // High damage for melee
+            magazineCapacity: 999, // Unlimited attacks
+            reloadTime: 0, // No reload for melee
+            thrustRange: 3.0, // Thrust attack range
+            thrustSpeed: 15.0, // Speed of thrust attack
         }
     };
     
@@ -3701,12 +3773,13 @@ function populateWeaponStatsDB() {
     currentAmmo = {
         'handgun': weaponStatsDB.handgun.magazineCapacity || 15,
         'sniper': weaponStatsDB.sniper.magazineCapacity || 5,
-        'smg': weaponStatsDB.smg.magazineCapacity || 30
+        'smg': weaponStatsDB.smg.magazineCapacity || 30,
+        'spear': 999 // Unlimited ammo for melee weapon
     };
 }
 
 
-function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
+function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg' | 'spear') {
     if (!weaponStatsDB[weaponType] || !weaponStatsDB[weaponType].model) {
         console.error(`Weapon type ${weaponType} or its model is not initialized.`);
         return;
@@ -3729,6 +3802,7 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     handgunModel.visible = (weaponType === 'handgun');
     sniperRifleModel.visible = (weaponType === 'sniper');
     smgModel.visible = (weaponType === 'smg');
+    spearModel.visible = (weaponType === 'spear');
     
     const sniperScope = sniperRifleModel.getObjectByName("sniperScopeMesh");
     if (sniperScope) {
@@ -3738,22 +3812,32 @@ function equipWeapon(weaponType: 'handgun' | 'sniper' | 'smg') {
     isAimingWithKeyActual = false;
     isAimingWithMouseActual = false;
 
-    if (newWeaponStats.model && newWeaponStats.hipPosition && newWeaponStats.hipRotation) {
+    if (newWeaponStats.model && newWeaponStats.hipPosition) {
         newWeaponStats.model.position.copy(newWeaponStats.hipPosition);
-        newWeaponStats.model.rotation.copy(newWeaponStats.hipRotation);
+        
+        // Use quaternion for spear weapon, Euler angles for others
+        if (weaponType === 'spear' && newWeaponStats.hipQuaternion) {
+            newWeaponStats.model.quaternion.copy(newWeaponStats.hipQuaternion);
+        } else if (newWeaponStats.hipRotation) {
+            newWeaponStats.model.rotation.copy(newWeaponStats.hipRotation);
+        }
     }
     
     isWeaponRecoiling = false;
     weaponRecoilTime = 0;
     activeWeaponRecoilOffset.set(0,0,0);
     cameraPitchRecoil = 0;
+    isSpearThrusting = false;
+    spearThrustTime = 0;
+    spearThrustOffset.set(0,0,0);
     
     // Initialize ammo if not already set
     if (Object.keys(currentAmmo).length === 0) {
         currentAmmo = {
             'handgun': weaponStatsDB.handgun.magazineCapacity || 15,
             'sniper': weaponStatsDB.sniper.magazineCapacity || 5,
-            'smg': weaponStatsDB.smg.magazineCapacity || 30
+            'smg': weaponStatsDB.smg.magazineCapacity || 30,
+            'spear': 999 // Unlimited ammo for melee weapon
         };
     } 
 
@@ -4086,6 +4170,11 @@ function initThreeJSGame() {
   smgModel = smgData.model;
   smgMuzzlePoint = smgData.muzzlePoint;
   camera.add(smgModel);
+
+  const spearData = createSpearModel();
+  spearModel = spearData.model;
+  spearTipPoint = spearData.tipPoint;
+  camera.add(spearModel);
   
   // Create bike model (initially hidden)
   recreateBikeModel();
@@ -6160,6 +6249,7 @@ function onKeyDown(event: KeyboardEvent) {
     case 'Digit1': queueInput(() => equipWeapon('handgun')); break;
     case 'Digit2': queueInput(() => equipWeapon('sniper')); break;
     case 'Digit3': queueInput(() => equipWeapon('smg')); break;
+    case 'Digit4': queueInput(() => equipWeapon('spear')); break;
     case 'KeyR': queueInput(() => startReload()); break;
     case 'KeyB': // B key to cycle scope zoom (sniper only)
       if (currentEquippedWeapon === 'sniper') queueInput(() => cycleScopeZoom()); 
@@ -6280,8 +6370,110 @@ function onMouseUp(event: MouseEvent) {
   }
 }
 
-function spawnProjectileInternal(muzzlePos: THREE.Vector3, projDir: THREE.Vector3, weaponType: 'handgun' | 'sniper' | 'smg') {
+// Spear thrust attack system
+function performSpearThrust(muzzlePos: THREE.Vector3, direction: THREE.Vector3) {
+  if (!scene || !camera || !controls) return;
+
+  const spearStats = weaponStatsDB.spear;
+  if (!spearStats) return;
+
+  // Calculate player/vehicle velocity for damage calculation
+  let playerVelocity = 0;
+  if (isOnBike && velocity) {
+    playerVelocity = velocity.length();
+  } else {
+    // Calculate player movement velocity if needed
+    const playerPos = controls.getObject().position;
+    // For now, use a base thrust speed
+    playerVelocity = spearStats.thrustSpeed || 15.0;
+  }
+
+  // Perform raycast attack from muzzle position
+  const raycaster = new THREE.Raycaster();
+  raycaster.set(muzzlePos, direction);
+  raycaster.far = spearStats.thrustRange || 3.0;
+
+  let hitSomething = false;
+
+  // Check for hits on zombies (single player)
+  if (gameMode === 'singleplayer' && zombies.length > 0) {
+    for (const zombie of zombies) {
+      if (!zombie.isAlive) continue;
+
+      const zombieBoundingBox = new THREE.Box3().setFromObject(zombie.mesh);
+      const intersectionPoint = new THREE.Vector3();
+      
+      if (raycaster.ray.intersectBox(zombieBoundingBox, intersectionPoint)) {
+        // Calculate velocity-based damage
+        const baseDamage = spearStats.damage || 60;
+        const velocityMultiplier = 1.0 + (playerVelocity / 20.0); // +50% damage at 10 m/s
+        const finalDamage = Math.floor(baseDamage * velocityMultiplier);
+
+        console.log(`Spear thrust hit! Velocity: ${playerVelocity.toFixed(1)} m/s, Damage: ${finalDamage}`);
+        
+        damageZombie(zombie.id, finalDamage, false);
+        hitSomething = true;
+        break;
+      }
+    }
+  }
+
+  // Check for hits on remote players (multiplayer)
+  if (gameMode === 'multiplayer') {
+    for (const [playerId, meshes] of remotePlayerMeshes) {
+      if (!meshes.mainMesh.visible) continue;
+
+      const playerBoundingBox = new THREE.Box3().setFromObject(meshes.mainMesh);
+      const intersectionPoint = new THREE.Vector3();
+      
+      if (raycaster.ray.intersectBox(playerBoundingBox, intersectionPoint)) {
+        const baseDamage = spearStats.damage || 60;
+        const velocityMultiplier = 1.0 + (playerVelocity / 20.0);
+        const finalDamage = Math.floor(baseDamage * velocityMultiplier);
+
+        console.log(`Spear thrust hit player! Velocity: ${playerVelocity.toFixed(1)} m/s, Damage: ${finalDamage}`);
+        
+        // Send hit event to remote player
+        sendGameEventToPlayer(playerId, {
+          type: 'hit_opponent',
+          data: {
+            damageDealt: finalDamage,
+            isHeadshot: false,
+            attackerVelocity: playerVelocity
+          }
+        });
+        
+        hitSomething = true;
+        break;
+      }
+    }
+  }
+
+  // Start thrust animation
+  startSpearThrust();
+  
+  if (hitSomething) {
+    showTemporaryMessage(`Spear thrust hit! (${playerVelocity.toFixed(1)} m/s)`, 300);
+  }
+}
+
+// Start spear thrust animation
+function startSpearThrust() {
+  if (!isSpearThrusting) {
+    isSpearThrusting = true;
+    spearThrustTime = 0;
+    spearThrustOffset.set(0, 0, 0);
+  }
+}
+
+function spawnProjectileInternal(muzzlePos: THREE.Vector3, projDir: THREE.Vector3, weaponType: 'handgun' | 'sniper' | 'smg' | 'spear') {
   if (!scene || !weaponStatsDB[weaponType] || !camera || !prng) return;
+
+  // Handle spear thrust attack separately
+  if (weaponType === 'spear') {
+    performSpearThrust(muzzlePos, projDir);
+    return;
+  }
 
   const stats = weaponStatsDB[weaponType];
   const finalProjDir = projDir.clone(); // Clone to avoid modifying the original direction vector used for P2P
@@ -6904,12 +7096,19 @@ function updateWeaponDynamics(delta: number) {
   }
 
   const baseTargetPosition = currentIsAimingDownSights ? stats.adsPosition! : stats.hipPosition!;
-  const baseTargetRotation = currentIsAimingDownSights ? stats.adsRotation! : stats.hipRotation!;
 
   weaponModel.position.lerp(baseTargetPosition, ADS_TRANSITION_SPEED * delta);
-  weaponModel.rotation.x = THREE.MathUtils.lerp(weaponModel.rotation.x, baseTargetRotation.x, ADS_TRANSITION_SPEED * delta);
-  weaponModel.rotation.y = THREE.MathUtils.lerp(weaponModel.rotation.y, baseTargetRotation.y, ADS_TRANSITION_SPEED * delta);
-  weaponModel.rotation.z = THREE.MathUtils.lerp(weaponModel.rotation.z, baseTargetRotation.z, ADS_TRANSITION_SPEED * delta);
+  
+  // Use quaternion for spear weapon, Euler angles for others
+  if (currentEquippedWeapon === 'spear') {
+    const baseTargetQuaternion = currentIsAimingDownSights ? stats.adsQuaternion! : stats.hipQuaternion!;
+    weaponModel.quaternion.slerp(baseTargetQuaternion, ADS_TRANSITION_SPEED * delta);
+  } else {
+    const baseTargetRotation = currentIsAimingDownSights ? stats.adsRotation! : stats.hipRotation!;
+    weaponModel.rotation.x = THREE.MathUtils.lerp(weaponModel.rotation.x, baseTargetRotation.x, ADS_TRANSITION_SPEED * delta);
+    weaponModel.rotation.y = THREE.MathUtils.lerp(weaponModel.rotation.y, baseTargetRotation.y, ADS_TRANSITION_SPEED * delta);
+    weaponModel.rotation.z = THREE.MathUtils.lerp(weaponModel.rotation.z, baseTargetRotation.z, ADS_TRANSITION_SPEED * delta);
+  }
 
   if (currentEquippedWeapon === 'sniper' && currentIsAimingDownSights) {
     weaponModel.rotation.x += cameraPitchRecoil; 
@@ -6938,6 +7137,33 @@ function updateWeaponDynamics(delta: number) {
   } else if (!isReloading) {
     weaponReloadTime = 0;
     weaponReloadOffset.set(0, 0, 0);
+  }
+  
+  // SPEAR THRUST ANIMATION
+  if (isSpearThrusting && currentEquippedWeapon === 'spear') {
+    spearThrustTime += delta;
+    const thrustDuration = 0.2; // 200ms duration
+    const thrustProgress = Math.min(spearThrustTime / thrustDuration, 1.0);
+    
+    if (thrustProgress < 0.3) {
+      // Quick thrust forward (30% of animation)
+      const thrustPhase = thrustProgress / 0.3;
+      spearThrustOffset.z = -0.5 * Math.sin(thrustPhase * Math.PI * 0.5); // Forward thrust
+    } else if (thrustProgress < 1.0) {
+      // Return to position (70% of animation)
+      const returnPhase = (thrustProgress - 0.3) / 0.7;
+      spearThrustOffset.z = -0.5 * Math.cos(returnPhase * Math.PI * 0.5);
+    } else {
+      // Animation complete
+      isSpearThrusting = false;
+      spearThrustTime = 0;
+      spearThrustOffset.set(0, 0, 0);
+    }
+    
+    weaponModel.position.add(spearThrustOffset);
+  } else if (!isSpearThrusting) {
+    spearThrustTime = 0;
+    spearThrustOffset.set(0, 0, 0);
   }
 }
 
