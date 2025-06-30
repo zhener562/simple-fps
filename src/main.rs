@@ -42,7 +42,7 @@ async fn main() -> ShuttleActixWeb<impl FnOnce(&mut ServiceConfig) + Send + Clon
         cfg
             .app_data(web::Data::new(signaling_server))
             .service(websocket)
-            .service(Files::new("/assets", "static/dist/assets"))
+            
             .service(Files::new("/game", "static/dist/").index_file("index.html"))
             .service(Files::new("/", "all-about-shinji/dist/").index_file("index.html"));
     };
