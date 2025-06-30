@@ -672,6 +672,7 @@ interface RemotePlayerMeshes {
     handgunMesh: THREE.Mesh;
     sniperMesh: THREE.Mesh;
     smgMesh: THREE.Mesh;
+    spearMesh: THREE.Group;
     bikeModel?: THREE.Group;
 }
 
@@ -723,6 +724,17 @@ const REMOTE_SMG_ADS_OFFSET = new THREE.Vector3(
     0,
     REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y * 0.77,
     REMOTE_PLAYER_TORSO_SIZE.z / 2 + 0.25
+);
+
+const REMOTE_SPEAR_HIP_OFFSET = new THREE.Vector3(
+    REMOTE_PLAYER_TORSO_SIZE.x / 2 + 0.15, 
+    REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y * 0.4, 
+    REMOTE_PLAYER_TORSO_SIZE.z / 2 - 0.1
+);
+const REMOTE_SPEAR_ADS_OFFSET = new THREE.Vector3(
+    0,
+    REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y * 0.8, 
+    REMOTE_PLAYER_TORSO_SIZE.z / 2 + 0.4 
 );
 
 
@@ -2432,6 +2444,38 @@ function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
     smgMesh.visible = false;
     mainMesh.add(smgMesh);
 
+    // Spear
+    const spearMesh = new THREE.Group();
+    
+    // Spear materials
+    const shaftMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown wood
+    const tipMaterial = new THREE.MeshLambertMaterial({ color: 0xC0C0C0 }); // Silver metal
+    
+    // Shaft (long wooden pole)
+    const spearShaftGeometry = new THREE.CylinderGeometry(0.015, 0.015, 2.0, 8);
+    const spearShaftMesh = new THREE.Mesh(spearShaftGeometry, shaftMaterial);
+    spearShaftMesh.castShadow = true;
+    spearMesh.add(spearShaftMesh);
+    
+    // Spear tip (metal point)
+    const spearTipGeometry = new THREE.ConeGeometry(0.03, 0.2, 8);
+    const spearTipMesh = new THREE.Mesh(spearTipGeometry, tipMaterial);
+    spearTipMesh.position.y = 1.1; // At the top of the shaft
+    spearTipMesh.castShadow = true;
+    spearMesh.add(spearTipMesh);
+    
+    // Binding near the tip for detail
+    const spearBindingGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.05, 8);
+    const spearBindingMesh = new THREE.Mesh(spearBindingGeometry, tipMaterial);
+    spearBindingMesh.position.y = 0.9;
+    spearMesh.add(spearBindingMesh);
+    
+    // Scale and position for remote player view
+    spearMesh.scale.set(0.8, 0.8, 0.8);
+    spearMesh.rotation.z = Math.PI / 6; // Slight angle
+    spearMesh.visible = false;
+    mainMesh.add(spearMesh);
+
     // Add player ID label above the player
     const playerIdLabel = createPlayerIdLabel(playerId);
     playerIdLabel.position.set(0, REMOTE_PLAYER_LEGS_SIZE.y + REMOTE_PLAYER_TORSO_SIZE.y + REMOTE_PLAYER_HEAD_RADIUS * 2 + 0.5, 0);
@@ -2443,7 +2487,8 @@ function createRemotePlayerMeshes(playerId: string): RemotePlayerMeshes {
         mainMesh,
         handgunMesh,
         sniperMesh,
-        smgMesh
+        smgMesh,
+        spearMesh
     };
 
     remotePlayerMeshes.set(playerId, meshes);
@@ -2514,9 +2559,10 @@ function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, we
     meshes.handgunMesh.visible = false;
     meshes.sniperMesh.visible = false;
     meshes.smgMesh.visible = false;
+    meshes.spearMesh.visible = false;
     
     // Show and position the active weapon
-    let activeMesh: THREE.Mesh;
+    let activeMesh: THREE.Mesh | THREE.Group;
     let hipOffset: THREE.Vector3;
     let adsOffset: THREE.Vector3;
     
@@ -2535,6 +2581,11 @@ function updateRemotePlayerWeaponForPlayer(playerId: string, aiming: boolean, we
             activeMesh = meshes.smgMesh;
             hipOffset = REMOTE_SMG_HIP_OFFSET;
             adsOffset = REMOTE_SMG_ADS_OFFSET;
+            break;
+        case 'spear':
+            activeMesh = meshes.spearMesh;
+            hipOffset = REMOTE_SPEAR_HIP_OFFSET;
+            adsOffset = REMOTE_SPEAR_ADS_OFFSET;
             break;
     }
     
@@ -6396,6 +6447,7 @@ function performSpearThrust(muzzlePos: THREE.Vector3, direction: THREE.Vector3) 
   let hitSomething = false;
 
   // Check for hits on zombies (single player)
+  console.log(`Spear attack - Game mode: ${gameMode}, Zombies count: ${zombies.length}`);
   if (gameMode === 'singleplayer' && zombies.length > 0) {
     for (const zombie of zombies) {
       if (!zombie.isAlive) continue;
@@ -6409,9 +6461,10 @@ function performSpearThrust(muzzlePos: THREE.Vector3, direction: THREE.Vector3) 
         const velocityMultiplier = 1.0 + (playerVelocity / 20.0); // +50% damage at 10 m/s
         const finalDamage = Math.floor(baseDamage * velocityMultiplier);
 
-        console.log(`Spear thrust hit! Velocity: ${playerVelocity.toFixed(1)} m/s, Damage: ${finalDamage}`);
+        console.log(`Spear thrust hit! Velocity: ${playerVelocity.toFixed(1)} m/s, Damage: ${finalDamage}, Zombie Health: ${zombie.health}`);
         
         damageZombie(zombie.id, finalDamage, false);
+        console.log(`After damage - Zombie Health: ${zombie.health}, Is Alive: ${zombie.isAlive}`);
         hitSomething = true;
         break;
       }
