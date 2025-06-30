@@ -1540,9 +1540,7 @@ function checkBikeCollisions(): void {
 
 // Calculate crash damage based on speed
 function calculateBikeCrashDamage(speedKmh: number): number {
-    if (speedKmh < 10) return 0; // No damage at very low speeds
-    if (speedKmh < 30) return 10; // Minor damage
-    if (speedKmh < 60) return 25; // Moderate damage
+    if (speedKmh < 70) return 0; // No damage below 70 km/h
     if (speedKmh < 100) return 50; // Major damage
     return 80; // Critical damage at high speeds
 }
