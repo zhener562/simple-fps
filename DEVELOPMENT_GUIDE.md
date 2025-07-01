@@ -78,7 +78,7 @@ assets = ["static/dist/index.html", "static/dist/assets/*"]
 cd static && npm run build
 
 # サーバー起動
-cargo run
+shuttle run
 ```
 
 ### デプロイ手順

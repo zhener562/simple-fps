@@ -1,4 +1,4 @@
 name = "fps"
 
 [build]
-assets = [ "static/simple-fps/dist/index.html","static/simple-fps/dist/assets/*","static/all-about-shinji/dist/index.html","static/all-about-shinji/dist/assets/*"]
+assets = ["static/card-game/dist/index.html","static/card-game/dist/assets/*", "static/simple-fps/dist/index.html","static/simple-fps/dist/assets/*","static/all-about-shinji/dist/index.html","static/all-about-shinji/dist/assets/*"]

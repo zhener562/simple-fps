@@ -13,6 +13,7 @@ interface ProfileSectionTitles {
   skillsSheet: string; // Added for Skills Sheet section
   projects: string;
   game: string;
+  cardGame: string;
   contact: string;
 }
 
@@ -26,6 +27,8 @@ interface ProfileUIStrings {
   skillsSheetLinkText: string; // Added for Skills Sheet section
   gameLinkDescription: string;
   gameLinkText: string;
+  cardGameLinkDescription: string;
+  cardGameLinkText: string;
 }
 
 interface ProfileData {
@@ -65,6 +68,7 @@ const translations: Record<string, ProfileData> = {
       skillsSheet: "スキルシート",
       projects: "プロジェクト",
       game: "ゲーム",
+      cardGame: "カードゲーム",
       contact: "お問い合わせ"
     },
     uiStrings: {
@@ -77,6 +81,8 @@ const translations: Record<string, ProfileData> = {
       skillsSheetLinkText: "スキルシートを見る (Google Document)",
       gameLinkDescription: "こちらのリンクからFPSゲームをプレイできます。",
       gameLinkText: "ゲームをプレイ",
+      cardGameLinkDescription: "こちらのリンクからカードゲームをプレイできます。",
+      cardGameLinkText: "カードゲームをプレイ",
     }
   },
   en: {
@@ -105,6 +111,7 @@ const translations: Record<string, ProfileData> = {
       skillsSheet: "Skills Sheet",
       projects: "Projects",
       game: "Game",
+      cardGame: "Card Game",
       contact: "Get in Touch"
     },
     uiStrings: {
@@ -117,6 +124,8 @@ const translations: Record<string, ProfileData> = {
       skillsSheetLinkText: "View Skills Sheet (Google Document)",
       gameLinkDescription: "You can play the FPS game from this link.",
       gameLinkText: "Play Game",
+      cardGameLinkDescription: "You can play the card game from this link.",
+      cardGameLinkText: "Play Card Game",
     }
   }
 };
@@ -262,6 +271,20 @@ function App() {
             aria-label={profileData.uiStrings.gameLinkText}
           >
             {profileData.uiStrings.gameLinkText}
+          </a>
+        </section>
+
+        <section id="card-game" className="content-section scroll-interactive-card" aria-labelledby="card-game-heading">
+          <h2 id="card-game-heading">{profileData.sectionTitles.cardGame}</h2>
+          <p className="card-game-description">{profileData.uiStrings.cardGameLinkDescription}</p>
+          <a
+            href="/card-game"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="contact-link-button"
+            aria-label={profileData.uiStrings.cardGameLinkText}
+          >
+            {profileData.uiStrings.cardGameLinkText}
           </a>
         </section>
 

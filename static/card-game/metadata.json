@@ -1,0 +1,6 @@
+{
+  "name": "p2pExample",
+  "description": "Example React app using Gemini",
+  "requestFramePermissions": [],
+  "prompt": ""
+}

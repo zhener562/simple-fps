@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "./simple-fps",
-    "./all-about-shinji"
+    "./all-about-shinji",
+    "./card-game"
   ],
   "scripts": {
     "build": "npm run build -ws"
