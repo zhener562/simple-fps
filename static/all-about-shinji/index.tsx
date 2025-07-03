@@ -131,7 +131,7 @@ const translations: Record<string, ProfileData> = {
 };
 
 const GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSf1iflhbrAWKN_KIW9Ye_lC1UBIlvLBjNhnScfNGoJgW9HXzQ/viewform?usp=sharing&ouid=100770318650346238783";
-const GOOGLE_RESUME_URL = "https://docs.google.com/document/d/e/2PACX-1vQ48NaBuVc_4KHCipcqo4TkLE9aoaiOkZO-vWpdnxIv1r-hU5Jay4Cqx0vwnYUru5IdevCFNXXqL7pi/pub";
+const GOOGLE_RESUME_URL = "https://docs.google.com/document/d/1q_q2R8Zi3jzDeCMETO3iPQxHPujH6GpKBaR8kuZYasU/edit?usp=sharing";
 const GOOGLE_SKILLS_SHEET_URL = "https://docs.google.com/document/d/11fAzy2TjCngP-va2P8K90OTM7Hnsu-JH/edit?usp=sharing&ouid=100770318650346238783&rtpof=true&sd=true";
 
 
