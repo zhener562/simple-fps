@@ -431,7 +431,6 @@ function App() {
   const [wsConnectionStatus, setWsConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
   const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const [connectedUsers, setConnectedUsers] = useState<string[]>([]);
-  const [roomJoined, setRoomJoined] = useState<string | null>(null);
   
   // ICE candidate queuing for timing issues
   const [pendingIceCandidates, setPendingIceCandidates] = useState<RTCIceCandidateInit[]>([]);
@@ -825,7 +824,13 @@ function App() {
       setP2PConnectionStatus('connected');
       setChatMessages(prev => [...prev, {id: Date.now().toString(), sender: 'system', text: 'P2P接続が確立しました！チャットまたはゲームを開始できます。', timestamp: Date.now()}]);
       setError(null);
-      if (activeRoom && roomPhase === 'chat_only') setRoomPhase('deck_selection');
+      console.log('データチャンネル開通 - activeRoom:', activeRoom, 'roomPhase:', roomPhase);
+      if (activeRoom && roomPhase === 'chat_only') {
+        console.log('デッキ選択フェーズに移行します');
+        setRoomPhase('deck_selection');
+      } else {
+        console.log('デッキ選択フェーズに移行しない理由:', {activeRoom, roomPhase});
+      }
     };
 
     channel.onmessage = (event) => {
@@ -867,7 +872,7 @@ function App() {
       setError('データチャネルエラーが発生しました。');
       setP2PConnectionStatus('failed');
     };
-  }, [p2pConnectionStatus, activeRoom, myPeerId, roomPhase, setRoomPhase, setError, resetP2PGameStates]);
+  }, [p2pConnectionStatus, myPeerId, setRoomPhase, setError, resetP2PGameStates]);
 
   const initializePeerConnection = useCallback(async (): Promise<RTCPeerConnection | null> => {
     
@@ -907,7 +912,7 @@ function App() {
           console.log("Local ICE candidate generated:", event.candidate);
           
           // Send ICE candidate through WebSocket if available
-          if (wsConnection && wsConnection.readyState === WebSocket.OPEN && roomJoined) {
+          if (wsConnection && wsConnection.readyState === WebSocket.OPEN && activeRoom) {
             console.log('ICE候補をWebSocket経由で送信中...');
             wsConnection.send(JSON.stringify({
               msg_type: 'ice-candidate',
@@ -969,7 +974,13 @@ function App() {
                 timestamp: Date.now()
               }]);
               
-              if (activeRoom && roomPhase === 'chat_only') setRoomPhase('deck_selection');
+              console.log('P2P接続確立 - activeRoom:', activeRoom, 'roomPhase:', roomPhase);
+              if (activeRoom && roomPhase === 'chat_only') {
+                console.log('デッキ選択フェーズに移行します');
+                setRoomPhase('deck_selection');
+              } else {
+                console.log('デッキ選択フェーズに移行しない理由:', {activeRoom, roomPhase});
+              }
             } else if (!dataChannelRef.current && p2pConnectionStatus !== 'connected') {
                console.log('ICE接続成功、データチャンネル待機中...');
                setP2PConnectionStatus('connecting'); 
@@ -1010,7 +1021,13 @@ function App() {
         setupDataChannelEvents(event.channel);
         if (peerConnectionRef.current && (peerConnectionRef.current.iceConnectionState === 'connected' || peerConnectionRef.current.iceConnectionState === 'completed')) {
             setP2PConnectionStatus('connected');
-            if (activeRoom && roomPhase === 'chat_only') setRoomPhase('deck_selection');
+            console.log('データチャンネル受信時のP2P接続確立 - activeRoom:', activeRoom, 'roomPhase:', roomPhase);
+            if ( roomPhase === 'chat_only') {
+              console.log('デッキ選択フェーズに移行します');
+              setRoomPhase('deck_selection');
+            } else {
+              console.log('デッキ選択フェーズに移行しない理由:', {activeRoom, roomPhase});
+            }
         }
       };
       
@@ -1025,7 +1042,7 @@ function App() {
       setIsLoadingP2PSetup(false);
     }
     return pc;
-  }, [setupDataChannelEvents, activeRoom, roomPhase, setRoomPhase, resetP2PGameStates, p2pConnectionStatus, setError]);
+  }, [setupDataChannelEvents, setRoomPhase, resetP2PGameStates, p2pConnectionStatus, setError]);
 
   const connectToSignalingServer = useCallback(async (roomName: string): Promise<WebSocket | null> => {
     if (wsConnection) {
@@ -1064,7 +1081,6 @@ function App() {
         setWsConnectionStatus('disconnected');
         setWsConnection(null);
         setConnectedUsers([]);
-        setRoomJoined(null);
         setIsJoiningRoom(false);
       };
 
@@ -1095,7 +1111,9 @@ function App() {
         break;
         
       case 'room-joined':
-        setRoomJoined(message.data.room_id);
+        console.log('room-joined メッセージ受信:', message.data);
+        
+        console.log('activeRoom を設定:', message.data.room_id);
         setConnectedUsers(message.data.players || []);
         setChatMessages(prev => [...prev, {
           id: generateId(),
@@ -1160,7 +1178,9 @@ function App() {
         break;
         
       case 'room-error':
+        console.log('room-error受信:', message.data);
         setError(`ルーム参加エラー: ${message.data.error}`);
+        // room-errorでactiveRoomをリセットしない
         break;
         
       default:
@@ -1279,6 +1299,8 @@ function App() {
     setHandshakeStep('offer-received');
     setIsP2PInitiator(false);
     
+    
+    
     setChatMessages(prev => [...prev, {
       id: generateId(),
       sender: 'system',
@@ -1313,7 +1335,9 @@ function App() {
           target: fromPeerId
         }))
       const activeWs = wsRef || wsConnection;
-      console.log('WebSocket状態チェック:', activeWs ? `readyState=${activeWs.readyState}` : 'WebSocket is null');
+      console.log('=== デバッグ情報 ===');
+      console.log('activeRoom:', activeRoom);
+      console.log('roomPhase:', roomPhase);
       console.log('WebSocket状態:', activeWs?.readyState === WebSocket.CONNECTING ? 'CONNECTING' : 
                                    activeWs?.readyState === WebSocket.OPEN ? 'OPEN' : 
                                    activeWs?.readyState === WebSocket.CLOSING ? 'CLOSING' : 
@@ -1464,7 +1488,6 @@ function App() {
     }
     setWsConnectionStatus('disconnected');
     setConnectedUsers([]);
-    setRoomJoined(null);
     setPendingIceCandidates([]);
     setHandshakeStep('waiting');
     
@@ -3056,7 +3079,7 @@ function App() {
           <div className="ws-status-section">
             <h4>シグナリングサーバー接続状態</h4>
             <p>WebSocket: <span className={`status-${wsConnectionStatus}`}>{wsConnectionStatus.toUpperCase()}</span></p>
-            {roomJoined && <p>参加中のルーム: {roomJoined}</p>}
+            {activeRoom && <p>参加中のルーム: {activeRoom}</p>}
             {connectedUsers.length > 0 && (
               <p>接続ユーザー数: {connectedUsers.length}人</p>
             )}
