@@ -87,6 +87,14 @@ interface OpponentGameState {
   opponentNotes: NoteItem[];
 }
 
+// --- Signaling Message Types ---
+interface SignalingMessage {
+  msg_type: string;
+  data: any;
+  target?: string;
+  sender?: string;
+}
+
 // --- Game Action Types ---
 interface BaseGameAction {
   peerId: string;
@@ -180,6 +188,7 @@ const FALLBACK_STUN_SERVERS: RTCIceServer[] = [
 ];
 
 const TURN_API_URL = "https://p2p-sample.metered.live/api/v1/turn/credentials?apiKey=d51424dc9b80232dbc239f680b412cdbfe33";
+const WS_SIGNALING_URL = window.location.protocol === 'https:' ? 'wss://' : 'ws://' + window.location.host + '/ws';
 
 
 const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
@@ -416,6 +425,17 @@ function App() {
   const [myPeerId, setMyPeerId] = useState<string>('');
   const [opponentActualPeerId, setOpponentActualPeerId] = useState<string | null>(null);
   const [isP2PInitiator, setIsP2PInitiator] = useState(false);
+  
+  // WebSocket signaling state
+  const [wsConnection, setWsConnection] = useState<WebSocket | null>(null);
+  const [wsConnectionStatus, setWsConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
+  const [connectedUsers, setConnectedUsers] = useState<string[]>([]);
+  const [roomJoined, setRoomJoined] = useState<string | null>(null);
+  
+  // ICE candidate queuing for timing issues
+  const [pendingIceCandidates, setPendingIceCandidates] = useState<RTCIceCandidateInit[]>([]);
+  const [handshakeStep, setHandshakeStep] = useState<string>('waiting');
 
   const chatMessagesContainerRef = useRef<HTMLDivElement>(null);
   const cardImportFileRef = useRef<HTMLInputElement>(null);
@@ -850,10 +870,7 @@ function App() {
   }, [p2pConnectionStatus, activeRoom, myPeerId, roomPhase, setRoomPhase, setError, resetP2PGameStates]);
 
   const initializePeerConnection = useCallback(async (): Promise<RTCPeerConnection | null> => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
+    
 
     setIsLoadingP2PSetup(true);
     setError(null);
@@ -886,8 +903,25 @@ function App() {
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log("New local ICE candidate:", event.candidate);
-          setLocalIceCandidatesManual(prev => [...prev, event.candidate.toJSON()]);
+          console.log("=== ICE候補送信 ===");
+          console.log("Local ICE candidate generated:", event.candidate);
+          
+          // Send ICE candidate through WebSocket if available
+          if (wsConnection && wsConnection.readyState === WebSocket.OPEN && roomJoined) {
+            console.log('ICE候補をWebSocket経由で送信中...');
+            wsConnection.send(JSON.stringify({
+              msg_type: 'ice-candidate',
+              data: event.candidate.toJSON(),
+              target: connectedUsers.find(id => id !== myPeerId) || null
+            }));
+            console.log('✓ ICE候補送信完了');
+          } else {
+            // Fallback to manual exchange
+            console.log('WebSocket利用不可、手動交換にフォールバック');
+            setLocalIceCandidatesManual(prev => [...prev, event.candidate!.toJSON()]);
+          }
+        } else {
+          console.log('ICE候補生成完了 (null candidate received)');
         }
       };
       
@@ -906,22 +940,38 @@ function App() {
 
       pc.oniceconnectionstatechange = () => {
         if (!peerConnectionRef.current) return;
+        console.log('=== ICE接続状態変更 ===');
         console.log('P2P ICE Connection State:', peerConnectionRef.current.iceConnectionState);
+        
         switch (peerConnectionRef.current.iceConnectionState) {
           case 'checking':
-            if (p2pConnectionStatus !== 'connected') { // Avoid reverting from 'connected' if just checking again
+            console.log('ICE接続チェック中...');
+            setHandshakeStep('ice-checking');
+            if (p2pConnectionStatus !== 'connected') {
                  setP2PConnectionStatus('connecting');
             }
             break;
           case 'connected':
           case 'completed':
+            console.log('✓ ICE接続成功！');
+            setHandshakeStep('ice-connected');
+            
             // Only update to connected if data channel is also open or expected to open.
-            // Data channel opening will also set status to 'connected'.
             if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
+              console.log('=== P2P接続完全確立 ===');
               setP2PConnectionStatus('connected');
+              setHandshakeStep('completed');
+              
+              setChatMessages(prev => [...prev, {
+                id: generateId(),
+                sender: 'system',
+                text: '🎉 P2P接続が完全に確立されました！ゲーム開始準備完了',
+                timestamp: Date.now()
+              }]);
+              
               if (activeRoom && roomPhase === 'chat_only') setRoomPhase('deck_selection');
             } else if (!dataChannelRef.current && p2pConnectionStatus !== 'connected') {
-               // ICE connected, but data channel not yet established (e.g. offerer waiting for ondatachannel)
+               console.log('ICE接続成功、データチャンネル待機中...');
                setP2PConnectionStatus('connecting'); 
             }
             break;
@@ -977,6 +1027,390 @@ function App() {
     return pc;
   }, [setupDataChannelEvents, activeRoom, roomPhase, setRoomPhase, resetP2PGameStates, p2pConnectionStatus, setError]);
 
+  const connectToSignalingServer = useCallback(async (roomName: string): Promise<WebSocket | null> => {
+    if (wsConnection) {
+      wsConnection.close();
+    }
+
+    setWsConnectionStatus('connecting');
+    setIsJoiningRoom(true);
+    
+    try {
+      const ws = new WebSocket(WS_SIGNALING_URL);
+      
+      ws.onopen = () => {
+        console.log('WebSocket connected to signaling server');
+        setWsConnectionStatus('connected');
+        setWsConnection(ws);
+        console.log('WebSocket state after setWsConnection:', ws.readyState);
+        
+        // Join room immediately after connection
+        ws.send(JSON.stringify({
+          msg_type: 'join-room',
+          data: {
+            room_id: roomName,
+            max_players: 2
+          }
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        console.log('WebSocket message received, ws.readyState:', ws.readyState);
+        handleSignalingMessage(JSON.parse(event.data), ws);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        setWsConnectionStatus('disconnected');
+        setWsConnection(null);
+        setConnectedUsers([]);
+        setRoomJoined(null);
+        setIsJoiningRoom(false);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setWsConnectionStatus('failed');
+        setError('シグナリングサーバーへの接続に失敗しました。');
+        setIsJoiningRoom(false);
+      };
+
+      return ws;
+    } catch (error) {
+      console.error('Failed to connect to signaling server:', error);
+      setWsConnectionStatus('failed');
+      setError('シグナリングサーバーへの接続に失敗しました。');
+      setIsJoiningRoom(false);
+      return null;
+    }
+  }, [wsConnection, myPeerId]);
+
+  const handleSignalingMessage = useCallback(async (message: SignalingMessage, wsRef?: WebSocket) => {
+    console.log('Received signaling message:', message);
+    console.log('Message structure - msg_type:', message.msg_type, 'sender:', message.sender, 'target:', message.target);
+    
+    switch (message.msg_type) {
+      case 'welcome':
+        console.log('Welcome message received, client ID:', message.data.client_id);
+        break;
+        
+      case 'room-joined':
+        setRoomJoined(message.data.room_id);
+        setConnectedUsers(message.data.players || []);
+        setChatMessages(prev => [...prev, {
+          id: generateId(),
+          sender: 'system',
+          text: `ルーム「${message.data.room_id}」に参加しました。接続されているユーザー: ${message.data.player_count}人`,
+          timestamp: Date.now()
+        }]);
+        break;
+        
+      case 'user-joined':
+        setConnectedUsers(prev => {
+          const newUsers = [...(prev || [])];
+          if (!newUsers.includes(message.data.user_id)) {
+            newUsers.push(message.data.user_id);
+          }
+          return newUsers;
+        });
+        setChatMessages(prev => [...prev, {
+          id: generateId(),
+          sender: 'system', 
+          text: `新しいユーザーが参加しました: ${message.data.user_id}`,
+          timestamp: Date.now()
+        }]);
+        
+        // If this is the second user and we don't have a connection, show connection button
+        if (message.data.player_count === 2 && p2pConnectionStatus === 'disconnected') {
+          setChatMessages(prev => [...prev, {
+            id: generateId(),
+            sender: 'system',
+            text: '2人揃いました！接続開始ボタンが表示されます。',
+            timestamp: Date.now()
+          }]);
+        }
+        break;
+        
+      case 'user-left':
+        setConnectedUsers(prev => prev.filter(id => id !== message.data.user_id));
+        setChatMessages(prev => [...prev, {
+          id: generateId(),
+          sender: 'system',
+          text: `ユーザーが退出しました: ${message.data.user_id}`,
+          timestamp: Date.now()
+        }]);
+        break;
+        
+      case 'offer':
+        if (message.sender) {
+          await handleReceivedOffer(message.data, message.sender, wsRef);
+        }
+        break;
+        
+      case 'answer':
+        if (message.sender) {
+          await handleReceivedAnswer(message.data, message.sender);
+        }
+        break;
+        
+      case 'ice-candidate':
+        if (message.sender) {
+          await handleReceivedIceCandidate(message.data, message.sender);
+        }
+        break;
+        
+      case 'room-error':
+        setError(`ルーム参加エラー: ${message.data.error}`);
+        break;
+        
+      default:
+        console.warn('Unknown signaling message type:', message.msg_type);
+    }
+  }, [p2pConnectionStatus, setChatMessages]);
+
+  const initiateAutomaticP2PConnection = useCallback(async (isInitiator: boolean) => {
+    if (peerConnectionRef.current) {
+      console.log('P2P connection already exists, skipping initialization');
+      return;
+    }
+
+    console.log('=== WebRTC ハンドシェイク開始 ===');
+    console.log('Role:', isInitiator ? 'オファー側' : 'アンサー側');
+    setIsP2PInitiator(isInitiator);
+    setHandshakeStep(isInitiator ? 'creating-offer' : 'waiting-for-offer');
+    setPendingIceCandidates([]); // Clear any pending ICE candidates
+    
+    const pc = await initializePeerConnection();
+    if (!pc) {
+      setError('P2P接続の初期化に失敗しました。');
+      setHandshakeStep('failed');
+      return;
+    }
+
+    if (isInitiator) {
+      // オファー側の処理
+      console.log('1. オファーSDP送信準備中...');
+      setHandshakeStep('creating-offer');
+      
+      // Create data channel and offer
+      const dc = pc.createDataChannel('game_and_chat_auto');
+      dataChannelRef.current = dc;
+      setupDataChannelEvents(dc);
+      
+      try {
+        console.log('2. オファーSDP作成中...');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        console.log('3. オファーSDP送信中...', offer);
+        setHandshakeStep('offer-sent');
+        
+        // Send offer through WebSocket
+        console.log(JSON.stringify({
+            msg_type: 'offer',
+            data: offer,
+            target: connectedUsers.find(id => id !== myPeerId) || null
+          }))
+          
+        if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+          wsConnection.send(JSON.stringify({
+            msg_type: 'offer',
+            data: offer,
+            target: connectedUsers.find(id => id !== myPeerId) || null
+          }));
+          
+          setChatMessages(prev => [...prev, {
+            id: generateId(),
+            sender: 'system',
+            text: '✓ ステップ1: オファーSDP送信完了',
+            timestamp: Date.now()
+          }]);
+        } else {
+          throw new Error('WebSocket接続が利用できません');
+        }
+      } catch (error) {
+        console.error('Error creating/sending offer:', error);
+        setError('オファーの作成または送信に失敗しました。');
+        setHandshakeStep('failed');
+      }
+    } else {
+      // アンサー側は待機状態
+      console.log('アンサー側: オファー受信を待機中...');
+      setChatMessages(prev => [...prev, {
+        id: generateId(),
+        sender: 'system',
+        text: 'アンサー側として待機中... オファーを待っています',
+        timestamp: Date.now()
+      }]);
+    }
+  }, [initializePeerConnection, setupDataChannelEvents, wsConnection, connectedUsers, myPeerId, setChatMessages]);
+
+  const processPendingIceCandidates = useCallback(async () => {
+    if (!peerConnectionRef.current || !peerConnectionRef.current.remoteDescription) {
+      console.log('Remote description not set yet, cannot process pending ICE candidates');
+      return;
+    }
+
+    console.log(`Processing ${pendingIceCandidates.length} pending ICE candidates`);
+    
+    for (const candidate of pendingIceCandidates) {
+      try {
+        await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log('✓ Pending ICE candidate processed successfully');
+      } catch (error) {
+        console.error('Error processing pending ICE candidate:', error);
+      }
+    }
+    
+    setPendingIceCandidates([]);
+    console.log('All pending ICE candidates processed');
+  }, [pendingIceCandidates]);
+
+  const handleReceivedOffer = useCallback(async (offer: RTCSessionDescriptionInit, fromPeerId: string, wsRef?: WebSocket) => {
+    console.log('=== オファー受信 ===');
+    console.log('4. オファー受信:', fromPeerId);
+    console.log('Offer SDP:', offer);
+    
+    if (peerConnectionRef.current) {
+      console.log('既にP2P接続が存在します。無視します。');
+      return;
+    }
+
+    setHandshakeStep('offer-received');
+    setIsP2PInitiator(false);
+    
+    setChatMessages(prev => [...prev, {
+      id: generateId(),
+      sender: 'system',
+      text: '✓ ステップ2: オファー受信完了',
+      timestamp: Date.now()
+    }]);
+
+    const pc = await initializePeerConnection();
+    if (!pc) {
+      setError('P2P接続の初期化に失敗しました。');
+      setHandshakeStep('failed');
+      return;
+    }
+
+    try {
+      console.log('5. オファー情報セット中...');
+      setHandshakeStep('setting-offer');
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      
+      console.log('6. アンサーSDP作成中...');
+      setHandshakeStep('creating-answer');
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      
+      console.log('7. アンサーSDP送信中...', answer);
+      setHandshakeStep('answer-sent');
+      
+      // Send answer through WebSocket
+      console.log(JSON.stringify({
+          msg_type: 'answer',
+          data: answer,
+          target: fromPeerId
+        }))
+      const activeWs = wsRef || wsConnection;
+      console.log('WebSocket状態チェック:', activeWs ? `readyState=${activeWs.readyState}` : 'WebSocket is null');
+      console.log('WebSocket状態:', activeWs?.readyState === WebSocket.CONNECTING ? 'CONNECTING' : 
+                                   activeWs?.readyState === WebSocket.OPEN ? 'OPEN' : 
+                                   activeWs?.readyState === WebSocket.CLOSING ? 'CLOSING' : 
+                                   activeWs?.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN');
+      if (activeWs && activeWs.readyState === WebSocket.OPEN) {
+        activeWs.send(JSON.stringify({
+          msg_type: 'answer',
+          data: answer,
+          target: fromPeerId
+        }));
+        
+        setChatMessages(prev => [...prev, {
+          id: generateId(),
+          sender: 'system',
+          text: '✓ ステップ3: アンサーSDP送信完了',
+          timestamp: Date.now()
+        }]);
+        
+        // Process any pending ICE candidates now that remote description is set
+        await processPendingIceCandidates();
+      } else {
+        throw new Error('WebSocket接続が利用できません');
+      }
+    } catch (error) {
+      console.error('Error handling offer:', error);
+      setError('オファーの処理に失敗しました。');
+      setHandshakeStep('failed');
+    }
+  }, [initializePeerConnection, wsConnection, setChatMessages, processPendingIceCandidates]);
+
+  const handleReceivedAnswer = useCallback(async (answer: RTCSessionDescriptionInit, fromPeerId: string) => {
+    console.log('=== アンサー受信 ===');
+    console.log('8. アンサー受信:', fromPeerId);
+    console.log('Answer SDP:', answer);
+    
+    if (!peerConnectionRef.current) {
+      console.error('No peer connection when receiving answer');
+      setError('P2P接続が初期化されていません。');
+      setHandshakeStep('failed');
+      return;
+    }
+
+    try {
+      console.log('9. アンサー情報セット中...');
+      setHandshakeStep('setting-answer');
+      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      
+      setChatMessages(prev => [...prev, {
+        id: generateId(),
+        sender: 'system',
+        text: '✓ ステップ4: アンサー情報セット完了',
+        timestamp: Date.now()
+      }]);
+      
+      console.log('10. ICE候補交換を開始...');
+      setHandshakeStep('ice-exchange');
+      
+      // Process any pending ICE candidates now that remote description is set
+      await processPendingIceCandidates();
+      
+    } catch (error) {
+      console.error('Error handling answer:', error);
+      setError('アンサーの処理に失敗しました。');
+      setHandshakeStep('failed');
+    }
+  }, [setChatMessages, processPendingIceCandidates]);
+
+  const handleReceivedIceCandidate = useCallback(async (candidate: RTCIceCandidateInit, fromPeerId: string) => {
+    console.log('=== ICE候補受信 ===');
+    console.log('ICE候補受信 from:', fromPeerId);
+    console.log('Candidate:', candidate);
+    
+    if (!peerConnectionRef.current) {
+      console.error('No peer connection when receiving ICE candidate');
+      return;
+    }
+
+    // Check if remote description is set
+    if (!peerConnectionRef.current.remoteDescription) {
+      console.log('Remote description not set yet, queuing ICE candidate');
+      setPendingIceCandidates(prev => {
+        const updated = [...prev, candidate];
+        console.log(`ICE候補をキューに追加 (total: ${updated.length})`);
+        return updated;
+      });
+      return;
+    }
+
+    try {
+      console.log('ICE候補情報セット中...');
+      await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log('✓ ICE候補追加成功');
+    } catch (error) {
+      console.error('Error adding ICE candidate:', error);
+    }
+  }, []);
+
 
   const handleP2PDisconnectManual = useCallback(async () => { // Made async just in case, though not strictly needed now
     console.log("Manual P2P disconnect initiated.");
@@ -997,6 +1431,8 @@ function App() {
     setRemoteSdpInputManual('');
     setLocalIceCandidatesManual([]);
     setRemoteIceCandidatesInputManual('');
+    setPendingIceCandidates([]);
+    setHandshakeStep('waiting');
     
     if (p2pConnectionStatus !== 'failed') { // Avoid overwriting a more specific 'failed' status
         setP2PConnectionStatus('disconnected');
@@ -1020,13 +1456,25 @@ function App() {
 
   const handleLeaveRoom = useCallback(async () => {
     setChatMessages(prev => [...prev, {id: generateId(), sender: 'system', text: `ルーム「${activeRoom}」から退出しました。`, timestamp: Date.now()}]);
+    
+    // Close WebSocket connection
+    if (wsConnection) {
+      wsConnection.close();
+      setWsConnection(null);
+    }
+    setWsConnectionStatus('disconnected');
+    setConnectedUsers([]);
+    setRoomJoined(null);
+    setPendingIceCandidates([]);
+    setHandshakeStep('waiting');
+    
     await handleP2PDisconnectManual(); 
     setActiveRoom(null);
     setCurrentView('main');
     setError(null);
     setMyPeerId(''); 
     // setChatMessages([]); // Chat messages are cleared by handleP2PDisconnectManual via resetP2PGameStates or should be kept per room
-  }, [handleP2PDisconnectManual, activeRoom]);
+  }, [handleP2PDisconnectManual, activeRoom, wsConnection]);
 
   const handleEnterP2PRoom = useCallback(async (roomToEnter: string) => {
     if (!roomToEnter.trim() && currentView === 'main' && !roomNameInput.trim()) {
@@ -1046,6 +1494,7 @@ function App() {
     setRoomNameInput('');
     setError(null);
 
+    // Load chat history
     const storageKey = `chatHistory_${targetRoom}`;
     const storedMessagesJson = localStorage.getItem(storageKey);
     let initialMessages: ChatMessage[] = [];
@@ -1057,10 +1506,17 @@ function App() {
         initialMessages.push({id:Date.now().toString(), sender:'system', text:`チャット履歴の読み込みに失敗しました。`, timestamp:Date.now()});
       }
     }
-    setChatMessages([...initialMessages, {id:Date.now().toString(), sender:'system', text:`ルーム「${targetRoom}」に入室しました。あなたのP2P ID: ${newPeerId.substring(0,6)}`, timestamp:Date.now()}]);
+    setChatMessages([...initialMessages, {id:Date.now().toString(), sender:'system', text:`ルーム「${targetRoom}」に入室しました。シグナリングサーバーに接続中...`, timestamp:Date.now()}]);
+
+    // Connect to WebSocket signaling server
+    const ws = await connectToSignalingServer(targetRoom);
+    if (!ws) {
+      setError('シグナリングサーバーへの接続に失敗しました。手動接続を使用してください。');
+      setChatMessages(prev => [...prev, {id:Date.now().toString(), sender:'system', text:`手動P2P接続を使用してください。あなたのP2P ID: ${newPeerId.substring(0,6)}`, timestamp:Date.now()}]);
+    }
     
     setIsLoading(false);
-  }, [currentView, roomNameInput, handleP2PDisconnectManual]);
+  }, [currentView, roomNameInput, handleP2PDisconnectManual, connectToSignalingServer]);
 
 
   const copyToClipboard = async (text: string, type: string) => {
@@ -2593,8 +3049,67 @@ function App() {
       {error && <p className="error-message room-error" role="alert">{error}</p>}
 
       {roomPhase !== 'game_active' && roomPhase !== 'MULLIGAN' && (
+        <section className="connection-setup" aria-labelledby="connection-setup-heading">
+          <h3 id="connection-setup-heading">接続設定</h3>
+          
+          {/* WebSocket Connection Status */}
+          <div className="ws-status-section">
+            <h4>シグナリングサーバー接続状態</h4>
+            <p>WebSocket: <span className={`status-${wsConnectionStatus}`}>{wsConnectionStatus.toUpperCase()}</span></p>
+            {roomJoined && <p>参加中のルーム: {roomJoined}</p>}
+            {connectedUsers.length > 0 && (
+              <p>接続ユーザー数: {connectedUsers.length}人</p>
+            )}
+            {isJoiningRoom && <p className="info-text">ルームに参加中...</p>}
+          </div>
+
+          {/* Auto P2P Connection Status */}
+          {wsConnectionStatus === 'connected' && (
+            <div className="auto-p2p-section">
+              <h4>自動P2P接続</h4>
+              <p>P2P接続状態: <span className={`status-${p2pConnectionStatus}`}>{p2pConnectionStatus.toUpperCase()}</span></p>
+              
+              {/* Handshake progress indicator */}
+              {handshakeStep !== 'waiting' && handshakeStep !== 'completed' && (
+                <div className="handshake-progress">
+                  <h5>ハンドシェイク進行状況:</h5>
+                  <p className="handshake-step">
+                    {handshakeStep === 'creating-offer' && '📝 オファーSDP作成中...'}
+                    {handshakeStep === 'offer-sent' && '✓ オファーSDP送信完了 → アンサー待機中'}
+                    {handshakeStep === 'offer-received' && '✓ オファー受信完了'}
+                    {handshakeStep === 'setting-offer' && '📝 オファー情報セット中...'}
+                    {handshakeStep === 'creating-answer' && '📝 アンサーSDP作成中...'}
+                    {handshakeStep === 'answer-sent' && '✓ アンサーSDP送信完了'}
+                    {handshakeStep === 'setting-answer' && '📝 アンサー情報セット中...'}
+                    {handshakeStep === 'ice-exchange' && '🔄 ICE候補交換中...'}
+                    {handshakeStep === 'ice-checking' && '🔍 ICE接続性チェック中...'}
+                    {handshakeStep === 'ice-connected' && '✓ ICE接続成功 → データチャンネル待機中'}
+                    {handshakeStep === 'failed' && '❌ ハンドシェイク失敗'}
+                  </p>
+                  {pendingIceCandidates.length > 0 && (
+                    <p className="ice-queue">保留中のICE候補: {pendingIceCandidates.length}個</p>
+                  )}
+                </div>
+              )}
+              
+              {connectedUsers.length < 2 && (
+                <p className="info-text">他のユーザーの参加を待っています...</p>
+              )}
+              {connectedUsers.length >= 2 && p2pConnectionStatus === 'disconnected' && handshakeStep === 'waiting' && (
+                <button onClick={() => initiateAutomaticP2PConnection(true)} className="start-connection-btn">
+                  P2P接続を開始
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Manual P2P Fallback */}
+      {roomPhase !== 'game_active' && roomPhase !== 'MULLIGAN' && (wsConnectionStatus === 'failed' || wsConnectionStatus === 'disconnected') && (
         <section className="p2p-setup manual-fallback" aria-labelledby="p2p-setup-manual-heading">
-          <h3 id="p2p-setup-manual-heading">P2P接続設定 (手動)</h3>
+          <h3 id="p2p-setup-manual-heading">P2P接続設定 (手動フォールバック)</h3>
+          <p className="info-text">自動接続が失敗しました。手動でP2P接続情報を交換してください。</p>
            {isLoadingP2PSetup && <p className="info-text">P2P接続を初期化中 (TURNサーバー情報取得中)...</p>}
           <p className="info-text">以下の手順でP2P接続情報を相手と交換してください。</p>
           <div className="connection-actions">
