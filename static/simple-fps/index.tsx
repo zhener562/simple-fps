@@ -157,6 +157,8 @@ let planeMass = 2410.0; // kg (A6M2 Zero mass)
 let planeWingArea = 22.44; // m² (wing surface area)
 let planeDragCoefficient = 0.025; // Clean configuration
 let planeLiftCoefficient = 1.2; // Maximum lift coefficient
+let planeFuselageArea = 8.5; // m² (fuselage cross-sectional area)
+let airDensity = 1.225; // kg/m³ (sea level air density)
 let planeMaxThrust = 25000.0; // N (Boosted engine for better acceleration)
 let planeCurrentThrust = 0.0; // Current thrust percentage (0-1)
 
@@ -171,6 +173,76 @@ let planeControlInputs = {
 // Environmental constants
 const AIR_DENSITY = 1.225; // kg/m³ at sea level
 const AIRCRAFT_GRAVITY = 9.81; // m/s² for aircraft physics
+
+// Aerodynamic force calculation
+function calculateAerodynamicForces(velocity: THREE.Vector3, quaternion: THREE.Quaternion): {
+    drag: THREE.Vector3;
+    lift: THREE.Vector3;
+    sideForce: THREE.Vector3;
+} {
+    const drag = new THREE.Vector3();
+    const lift = new THREE.Vector3();
+    const sideForce = new THREE.Vector3();
+    
+    // Calculate speed and velocity direction
+    const speed = velocity.length();
+    if (speed < 0.1) {
+        return { drag, lift, sideForce }; // No forces at very low speed
+    }
+    
+    // Get aircraft orientation vectors
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
+    
+    // Velocity in aircraft reference frame
+    const velocityNormalized = velocity.clone().normalize();
+    
+    // Calculate angle of attack (alpha) - angle between velocity and forward direction
+    const alphaRadians = Math.acos(Math.max(-1, Math.min(1, forward.dot(velocityNormalized))));
+    const alphaDegrees = (alphaRadians * 180) / Math.PI;
+    
+    // Calculate sideslip angle (beta) - angle between velocity and aircraft plane
+    const velocityInPlane = velocity.clone().projectOnPlane(right);
+    const betaRadians = Math.atan2(velocity.dot(right), velocityInPlane.length());
+    
+    // Dynamic pressure
+    const dynamicPressure = 0.5 * airDensity * speed * speed;
+    
+    // === DRAG FORCE ===
+    // Drag always opposes velocity direction
+    const dragCoeff = planeDragCoefficient + 
+                     0.1 * Math.abs(Math.sin(alphaRadians)) + // Induced drag from angle of attack
+                     0.05 * Math.abs(Math.sin(betaRadians));  // Drag from sideslip
+    
+    const projectedArea = planeFuselageArea + 
+                         planeWingArea * Math.abs(Math.sin(alphaRadians)); // Wing projected area
+    
+    const dragMagnitude = dragCoeff * dynamicPressure * projectedArea;
+    drag.copy(velocityNormalized).multiplyScalar(-dragMagnitude);
+    
+    // === LIFT FORCE ===
+    // Lift is perpendicular to velocity, in the wing plane
+    if (alphaDegrees < 90) { // Only generate lift in reasonable angle range
+        const liftCoeff = planeLiftCoefficient * Math.sin(2 * alphaRadians); // Simple lift curve
+        const liftMagnitude = liftCoeff * dynamicPressure * planeWingArea;
+        
+        // Lift direction: perpendicular to velocity, towards the "up" side of aircraft
+        const liftDirection = velocityNormalized.clone().cross(right).normalize();
+        if (liftDirection.dot(up) < 0) {
+            liftDirection.multiplyScalar(-1); // Ensure lift points "up" relative to aircraft
+        }
+        lift.copy(liftDirection).multiplyScalar(liftMagnitude);
+    }
+    
+    // === SIDE FORCE ===
+    // Force due to sideslip (simplified)
+    const sideCoeff = 0.1; // Simplified side force coefficient
+    const sideMagnitude = sideCoeff * dynamicPressure * planeWingArea * Math.sin(betaRadians);
+    sideForce.copy(right).multiplyScalar(-sideMagnitude); // Opposes sideslip
+    
+    return { drag, lift, sideForce };
+}
 
 // Cloud system variables
 const clouds: THREE.Mesh[] = [];
@@ -8207,6 +8279,12 @@ function animate() {
         
         // Weight (gravity)
         forces.add(new THREE.Vector3(0, -AIRCRAFT_GRAVITY * planeMass, 0));
+        
+        // Aerodynamic forces
+        const aerodynamicForces = calculateAerodynamicForces(planeVelocity, planeQuaternion);
+        forces.add(aerodynamicForces.drag);
+        forces.add(aerodynamicForces.lift);
+        forces.add(aerodynamicForces.sideForce);
         
         // Calculate linear acceleration (F = ma)
         const acceleration = forces.divideScalar(planeMass);
