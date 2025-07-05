@@ -1925,7 +1925,7 @@ let currentMapType: MapType | undefined = undefined;
 let selectedMapType: MapType | 'random' = 'random';
 
 
-const DEATHS_TO_LOSE = 3; // Changed from KILLS_TO_WIN
+const DEATHS_TO_LOSE = 10; // Changed from KILLS_TO_WIN
 let myScore = 0;
 let opponentScore = 0;
 let isGameOver = false;
