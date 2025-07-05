@@ -294,12 +294,12 @@ function damageBike(damage: number): void {
     
     // Visual feedback for bike damage
     if (bikeModel) {
-        bikeModel.traverse((child: any) => {
+        bikeModel.traverse((child: THREE.Object3D) => {
             if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
                 const originalColor = child.material.color.getHex();
                 child.material.color.setHex(0xff0000); // Red damage indicator
                 setTimeout(() => {
-                    if (child && child.material instanceof THREE.MeshStandardMaterial) {
+                    if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
                         child.material.color.setHex(originalColor);
                     }
                 }, 200);
@@ -319,13 +319,15 @@ function damageBike(damage: number): void {
         // Remove bike from scene and cleanup
         if (bikeModel && bikeModel.parent) {
             scene.remove(bikeModel);
-            bikeModel.traverse((child: any) => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) {
-                    if (Array.isArray(child.material)) {
-                        child.material.forEach((mat: any) => mat.dispose());
-                    } else {
-                        child.material.dispose();
+            bikeModel.traverse((child: THREE.Object3D) => {
+                if (child instanceof THREE.Mesh) {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((mat: THREE.Material) => mat.dispose());
+                        } else {
+                            child.material.dispose();
+                        }
                     }
                 }
             });
@@ -1352,13 +1354,15 @@ function updateZombies(delta: number): void {
     if (!zombie.isAlive) {
       scene.remove(zombie.mesh);
       // Dispose geometry and materials for Groups
-      zombie.mesh.traverse((child: any) => {
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((mat: any) => mat.dispose());
-          } else {
-            child.material.dispose();
+      zombie.mesh.traverse((child: THREE.Object3D) => {
+        if (child instanceof THREE.Mesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat: THREE.Material) => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
           }
         }
       });
@@ -1559,13 +1563,15 @@ function resetGameState(): void {
   zombies.forEach(zombie => {
     scene.remove(zombie.mesh);
     // Dispose geometry and materials for Groups
-    zombie.mesh.traverse((child: any) => {
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach((mat: any) => mat.dispose());
-        } else {
-          child.material.dispose();
+    zombie.mesh.traverse((child: THREE.Object3D) => {
+      if (child instanceof THREE.Mesh) {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach((mat: THREE.Material) => mat.dispose());
+          } else {
+            child.material.dispose();
+          }
         }
       }
     });
@@ -1609,7 +1615,7 @@ function getTerrainHeightAt(x: number, z: number): number {
     // Collect all meshes from terrain for intersection testing
     const terrainMeshesToTest: THREE.Mesh[] = [];
     terrainMeshes.forEach(terrain => {
-        terrain.traverse((child: any) => {
+        terrain.traverse((child: THREE.Object3D) => {
             if (child instanceof THREE.Mesh) {
                 terrainMeshesToTest.push(child);
             }
@@ -1855,7 +1861,7 @@ function createExplosionEffect(position: THREE.Vector3): void {
         }, 50);
     }
 }
-const mapFeatures: THREE.Mesh[] = [];
+const mapFeatures: THREE.Object3D[] = [];
 const buildingMeshes: THREE.Object3D[] = []; // Store building meshes for collision detection
 const terrainMeshes: THREE.Object3D[] = []; // Store terrain meshes separately from collision objects
 let cachedTerrainMeshes: THREE.Mesh[] = []; // Cache terrain meshes for performance
@@ -2225,7 +2231,14 @@ function connectToSignalingServer(): Promise<void> {
     });
 }
 
-function handleSignalingMessage(message: any) {
+interface SignalingMessage {
+    msg_type: string;
+    data: any;
+    sender_id?: string;
+    sender?: string;
+}
+
+function handleSignalingMessage(message: SignalingMessage) {
     
     
     switch (message.msg_type) {
@@ -2307,19 +2320,19 @@ function handleSignalingMessage(message: any) {
             
         case 'offer':
             if (message.sender !== clientId) {
-                handleRemoteOffer(message.data, message.sender);
+                handleRemoteOffer(message.data, message.sender!);
             }
             break;
             
         case 'answer':
             if (message.sender !== clientId) {
-                handleRemoteAnswer(message.data, message.sender);
+                handleRemoteAnswer(message.data, message.sender!);
             }
             break;
             
         case 'ice-candidate':
             if (message.sender !== clientId) {
-                handleRemoteIceCandidate(message.data, message.sender);
+                handleRemoteIceCandidate(message.data, message.sender!);
             }
             break;
     }
@@ -2984,7 +2997,12 @@ function handleRemoteGameEvent(gameEvent: GameEvent, senderId?: string) {
 }
 
 // Handle incoming data channel messages from a specific player
-function handleDataChannelMessage(message: any, senderId: string) {
+interface DataChannelMessage {
+    type: string;
+    data: any;
+}
+
+function handleDataChannelMessage(message: DataChannelMessage, senderId: string) {
     if (message.type === 'playerState') {
         const state = message.data as PlayerState;
         
@@ -3097,7 +3115,7 @@ async function handleRemoteAnswer(answer: RTCSessionDescriptionInit, senderId: s
     }
 }
 
-async function handleRemoteIceCandidate(candidateData: any, senderId: string) {
+async function handleRemoteIceCandidate(candidateData: RTCIceCandidateInit, senderId: string) {
     const connection = peerConnections.get(senderId);
     if (!connection) {
         console.error('Peer connection not found for sender:', senderId);
@@ -3401,7 +3419,8 @@ function resetP2PState() {
     currentMapType = undefined; 
     if (p2pStatusText) p2pStatusText.textContent = 'Status: Disconnected';
     if (gameMode === 'multiplayer' && signalingPanel) {
-        if (!dataChannel || dataChannel.readyState !== 'open') {
+        const isDataChannelClosed = !dataChannel || dataChannel.readyState !== 'open';
+        if (isDataChannelClosed) {
              signalingPanel.style.display = 'block';
         }
     }
@@ -3532,9 +3551,9 @@ function resetGameScene() {
     mapFeatures.forEach(feature => {
         if (feature.parent === scene) scene.remove(feature);
         else if (feature.parent) feature.parent.remove(feature); 
-        if (feature.geometry) feature.geometry.dispose();
-         if (feature.name.startsWith("forest_bush_") && feature.material && !Array.isArray(feature.material)) {
-            (feature.material as THREE.Material).dispose(); 
+        if (feature instanceof THREE.Mesh && feature.geometry) feature.geometry.dispose();
+         if (feature.name.startsWith("forest_bush_") && feature instanceof THREE.Mesh && feature.material && !Array.isArray(feature.material)) {
+            feature.material.dispose(); 
         }
     });
     mapFeatures.length = 0;
@@ -3543,13 +3562,15 @@ function resetGameScene() {
     // Clean up terrain meshes
     terrainMeshes.forEach(terrain => {
         if (terrain.parent === scene) scene.remove(terrain);
-        terrain.traverse((child: any) => {
-            if (child.geometry) child.geometry.dispose();
-            if (child.material) {
-                if (Array.isArray(child.material)) {
-                    child.material.forEach((mat: any) => mat.dispose());
-                } else {
-                    child.material.dispose();
+        terrain.traverse((child: THREE.Object3D) => {
+            if (child instanceof THREE.Mesh) {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach((mat: THREE.Material) => mat.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
                 }
             }
         });
@@ -5179,8 +5200,8 @@ function loadFBXTerrain(fbxPath: string) {
         (terrainModel) => {
             
             // Debug: Log all children in the model
-            terrainModel.traverse((child: any) => {
-                if (child.geometry) {
+            terrainModel.traverse((child: THREE.Object3D) => {
+                if (child instanceof THREE.Mesh && child.geometry) {
                 }
             });
             
@@ -5193,13 +5214,13 @@ function loadFBXTerrain(fbxPath: string) {
 
             let meshCount = 0;
             // Apply material to all meshes in the model
-            terrainModel.traverse((child: any) => {
+            terrainModel.traverse((child: THREE.Object3D) => {
                 if (child instanceof THREE.Mesh) {
                     meshCount++;
                     if (child.material) {
                         // Dispose old material to prevent memory leaks
                         if (Array.isArray(child.material)) {
-                            child.material.forEach((mat: any) => mat.dispose());
+                            child.material.forEach((mat: THREE.Material) => mat.dispose());
                         } else {
                             child.material.dispose();
                         }
@@ -5226,7 +5247,7 @@ function loadFBXTerrain(fbxPath: string) {
             
             // Cache terrain meshes for performance
             cachedTerrainMeshes = [];
-            terrainModel.traverse((child: any) => {
+            terrainModel.traverse((child: THREE.Object3D) => {
                 if (child instanceof THREE.Mesh) {
                     cachedTerrainMeshes.push(child);
                 }
@@ -5268,7 +5289,7 @@ function addProceduralMountainElements() {
         const boulderGeometry = new THREE.SphereGeometry(boulderSize, 8, 8);
         const boulderMesh = new THREE.Mesh(boulderGeometry, mountainRockMaterial);
         
-        let boulderX, boulderZ;
+        let boulderX: number, boulderZ: number;
         let attempts = 0;
         do {
             boulderX = prng.randFloat(-mountainBounds, mountainBounds);
@@ -5301,7 +5322,7 @@ function addProceduralMountainElements() {
             roughness: 0.8 
         }));
         
-        let treeX, treeZ;
+        let treeX: number, treeZ: number;
         let attempts = 0;
         do {
             treeX = prng.randFloat(-mountainBounds + 20, mountainBounds - 20);
@@ -5352,7 +5373,7 @@ function generateProceduralMountainMap() {
         const peakGeometry = new THREE.ConeGeometry(peakRadius, peakHeight, 8);
         const peakMesh = new THREE.Mesh(peakGeometry, mountainRockMaterial);
         
-        let peakX, peakZ;
+        let peakX: number, peakZ: number;
         let attempts = 0;
         do {
             peakX = prng.randFloat(-mountainBounds, mountainBounds);
@@ -5386,9 +5407,9 @@ function generateMapFeatures() {
             scene.remove(feature);
         }
 
-        if (feature.geometry) feature.geometry.dispose();
-        if (feature.name.startsWith("forest_bush_") && feature.material && !Array.isArray(feature.material)) {
-            (feature.material as THREE.Material).dispose();
+        if (feature instanceof THREE.Mesh && feature.geometry) feature.geometry.dispose();
+        if (feature.name.startsWith("forest_bush_") && feature instanceof THREE.Mesh && feature.material && !Array.isArray(feature.material)) {
+            feature.material.dispose();
         }
     });
     mapFeatures.length = 0;
@@ -5397,13 +5418,15 @@ function generateMapFeatures() {
     // Clean up terrain meshes
     terrainMeshes.forEach(terrain => {
         if (terrain.parent === scene) scene.remove(terrain);
-        terrain.traverse((child: any) => {
-            if (child.geometry) child.geometry.dispose();
-            if (child.material) {
-                if (Array.isArray(child.material)) {
-                    child.material.forEach((mat: any) => mat.dispose());
-                } else {
-                    child.material.dispose();
+        terrain.traverse((child: THREE.Object3D) => {
+            if (child instanceof THREE.Mesh) {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach((mat: THREE.Material) => mat.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
                 }
             }
         });
@@ -7379,18 +7402,20 @@ function updateProjectiles(delta: number) {
             hitSomething = true;
             
             // Visual feedback - different colors for headshots
-            remotePlayerMesh.traverse(child => {
+            if (remotePlayerMesh) {
+                remotePlayerMesh.traverse(child => {
                 if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-                    const originalColor = (child.material as THREE.MeshStandardMaterial).color.getHex();
+                    const originalColor = child.material.color.getHex();
                     const hitColor = isHeadshot ? 0xffff00 : 0xff0000; // Yellow for headshot, red for body
-                    (child.material as THREE.MeshStandardMaterial).color.setHex(hitColor); 
+                    child.material.color.setHex(hitColor); 
                     setTimeout(() => {
-                        if(child && child.material instanceof THREE.MeshStandardMaterial) { 
-                            (child.material as THREE.MeshStandardMaterial).color.setHex(originalColor);
+                        if(child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) { 
+                            child.material.color.setHex(originalColor);
                         }
                     }, 150);
                 }
             });
+            }
             
             // Debug output for testing
             
@@ -7431,7 +7456,7 @@ function updateProjectiles(delta: number) {
                 });
                 
                 // Visual feedback for bike hit
-                remotePlayerBikeModel.traverse((child: any) => {
+                remotePlayerBikeModel.traverse((child: THREE.Object3D) => {
                     if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
                         const originalColor = child.material.color.getHex();
                         child.material.color.setHex(0xff8800); // Orange for bike damage
