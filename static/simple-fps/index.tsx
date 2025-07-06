@@ -1231,14 +1231,14 @@ async function createZombie(position: THREE.Vector3): Promise<Zombie> {
   
   // Calculate time-based stat scaling
   const timeSurvived = gameStartTime ? (performance.now() - gameStartTime) / 1000 : 0;
-  const timeMultiplier = 1.0 + Math.min(timeSurvived / 120, 9.0); // Up to 10x stats after 60 seconds
+  const timeMultiplier = 1.0 + Math.min(timeSurvived / 180, 190.0); // Up to 10x stats after 60 seconds
   
   console.log(`Zombie Stats: TimeSurvived=${timeSurvived.toFixed(1)}s, TimeMultiplier=${timeMultiplier.toFixed(2)}x`);
   
   // Base stats with random variation (±20%)
-  const baseHealth = 50;
-  const baseSpeed = 2.0;
-  const baseAttackDamage = 15;
+  const baseHealth = 200;
+  const baseSpeed = 1.0;
+  const baseAttackDamage = 5;
   const baseAttackRange = 2.0;
   const baseCooldown = 1500;
   
@@ -8648,9 +8648,9 @@ function animate() {
       
       // Increase difficulty over time
       const timeSurvived = (performance.now() - gameStartTime) / 1000;
-      if (timeSurvived > 30) { // After 30 seconds
-        zombieSpawnInterval = Math.max(2000, 5000 - (timeSurvived - 30) * 50); // Faster spawning
-        zombieSpawnCount = Math.min(3, 1 + Math.floor((timeSurvived - 30) / 60)); // More zombies
+      if (timeSurvived > 60) { // After 30 seconds
+        zombieSpawnInterval = Math.max(2500, 5000 - (timeSurvived - 60) * 50); // Faster spawning
+        zombieSpawnCount = Math.min(2, 1 + Math.floor((timeSurvived - 60) / 60)); // More zombies
       }
     }
   }
