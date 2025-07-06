@@ -5,7 +5,8 @@
   "workspaces": [
     "./simple-fps",
     "./all-about-shinji",
-    "./card-game"
+    "./card-game",
+    "./clone-shinji"
   ],
   "scripts": {
     "build": "npm run build -ws"

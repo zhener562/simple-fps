@@ -5,6 +5,7 @@ assets = [
     "static/*/dist/index.html",
     "static/*/dist/assets/*",
     "static/simple-fps/dist/assets/89-terrain/*",
+    "static/all-about-shinji/.env.local",
     ]
 
 [deploy]
@@ -12,4 +13,5 @@ include = [
     "static/*/dist/index.html",
     "static/*/dist/assets/*", 
     "static/simple-fps/dist/assets/89-terrain/*",
+    "static/all-about-shinji/.env.local",
 ]

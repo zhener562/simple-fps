@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 // Removed: FormEvent, GoogleGenAI, GenerateContentResponse as they are no longer used for the contact form.
 
@@ -14,6 +14,7 @@ interface ProfileSectionTitles {
   projects: string;
   game: string;
   cardGame: string;
+  aiBot: string; // Added for AI Bot section
   contact: string;
 }
 
@@ -29,6 +30,8 @@ interface ProfileUIStrings {
   gameLinkText: string;
   cardGameLinkDescription: string;
   cardGameLinkText: string;
+  aiBotLinkDescription: string; // Added for AI Bot section
+  aiBotLinkText: string; // Added for AI Bot section
 }
 
 interface ProfileData {
@@ -69,6 +72,7 @@ const translations: Record<string, ProfileData> = {
       projects: "プロジェクト",
       game: "ゲーム",
       cardGame: "カードゲーム",
+      aiBot: "AIボット",
       contact: "お問い合わせ"
     },
     uiStrings: {
@@ -83,6 +87,8 @@ const translations: Record<string, ProfileData> = {
       gameLinkText: "ゲームをプレイ",
       cardGameLinkDescription: "こちらのリンクからカードゲームをプレイできます。",
       cardGameLinkText: "カードゲームをプレイ",
+      aiBotLinkDescription: "AIボットが私の代わりにご質問にお答えします。",
+      aiBotLinkText: "AIボットと話す",
     }
   },
   en: {
@@ -112,6 +118,7 @@ const translations: Record<string, ProfileData> = {
       projects: "Projects",
       game: "Game",
       cardGame: "Card Game",
+      aiBot: "AI Bot",
       contact: "Get in Touch"
     },
     uiStrings: {
@@ -126,6 +133,8 @@ const translations: Record<string, ProfileData> = {
       gameLinkText: "Play Game",
       cardGameLinkDescription: "You can play the card game from this link.",
       cardGameLinkText: "Play Card Game",
+      aiBotLinkDescription: "An AI bot will answer your questions on my behalf.",
+      aiBotLinkText: "Talk to AI Bot",
     }
   }
 };
@@ -285,6 +294,20 @@ function App() {
             aria-label={profileData.uiStrings.cardGameLinkText}
           >
             {profileData.uiStrings.cardGameLinkText}
+          </a>
+        </section>
+
+        <section id="ai-bot" className="content-section scroll-interactive-card" aria-labelledby="ai-bot-heading">
+          <h2 id="ai-bot-heading">{profileData.sectionTitles.aiBot}</h2>
+          <p className="ai-bot-description">{profileData.uiStrings.aiBotLinkDescription}</p>
+          <a
+            href={"/clone-shinji"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="contact-link-button"
+            aria-label={profileData.uiStrings.aiBotLinkText}
+          >
+            {profileData.uiStrings.aiBotLinkText}
           </a>
         </section>
 
