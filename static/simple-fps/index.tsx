@@ -7555,8 +7555,13 @@ function updateProjectiles(delta: number) {
             // First, check specifically for headshot by testing head mesh
             let headMesh: THREE.Mesh | null = null;
             zombie.mesh.traverse((child) => {
-                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry && child.position.y > 1.8) {
-                    headMesh = child;
+                if (child instanceof THREE.Mesh && child.geometry instanceof THREE.BoxGeometry) {
+                    const geo = child.geometry as THREE.BoxGeometry;
+                    const params = geo.parameters;
+                    // Head mesh has dimensions 0.4x0.4x0.4
+                    if (params.width === 0.4 && params.height === 0.4 && params.depth === 0.4) {
+                        headMesh = child;
+                    }
                 }
             });
             
