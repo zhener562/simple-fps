@@ -3,7 +3,6 @@
 .shuttle*
 Secrets*.toml
 /static/node_modules
-/static/card-game/node_modules
-/static/all-about-shinji/node_modules
-/static/simple-fps/node_modules
+/static/*/node_modules
+/static/*/dist
 
