@@ -1,0 +1,6 @@
+{
+  "name": "ai agent research",
+  "description": "AI agent research article with ollama and gpt-oos evaluation",
+  "requestFramePermissions": [],
+  "prompt": ""
+}

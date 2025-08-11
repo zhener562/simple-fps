@@ -12,6 +12,7 @@ interface ProfileSectionTitles {
   resume: string;
   skillsSheet: string; // Added for Skills Sheet section
   projects: string;
+  techArticle: string; // Added for Tech Article section
   game: string;
   cardGame: string;
   aiBot: string; // Added for AI Bot section
@@ -26,6 +27,8 @@ interface ProfileUIStrings {
   resumeLinkText: string;
   skillsSheetLinkDescription: string; // Added for Skills Sheet section
   skillsSheetLinkText: string; // Added for Skills Sheet section
+  techArticleLinkDescription: string; // Added for Tech Article section
+  techArticleLinkText: string; // Added for Tech Article section
   gameLinkDescription: string;
   gameLinkText: string;
   cardGameLinkDescription: string;
@@ -70,6 +73,7 @@ const translations: Record<string, ProfileData> = {
       resume: "履歴書",
       skillsSheet: "スキルシート",
       projects: "プロジェクト",
+      techArticle: "技術記事",
       game: "ゲーム",
       cardGame: "カードゲーム",
       aiBot: "AIボット",
@@ -83,6 +87,8 @@ const translations: Record<string, ProfileData> = {
       resumeLinkText: "履歴書を見る (Google Document)",
       skillsSheetLinkDescription: "保有スキルや経験プロジェクトの詳細については、以下のスキルシートをご覧ください。",
       skillsSheetLinkText: "スキルシートを見る (Google Document)",
+      techArticleLinkDescription: "AIエージェント調査の技術記事を掲載しています。",
+      techArticleLinkText: "技術記事を読む",
       gameLinkDescription: "こちらのリンクからFPSゲームをプレイできます。",
       gameLinkText: "ゲームをプレイ",
       cardGameLinkDescription: "こちらのリンクからカードゲームをプレイできます。",
@@ -116,6 +122,7 @@ const translations: Record<string, ProfileData> = {
       resume: "Resume",
       skillsSheet: "Skills Sheet",
       projects: "Projects",
+      techArticle: "Tech Article",
       game: "Game",
       cardGame: "Card Game",
       aiBot: "AI Bot",
@@ -129,6 +136,8 @@ const translations: Record<string, ProfileData> = {
       resumeLinkText: "View Resume (Google Document)",
       skillsSheetLinkDescription: "For details on my skills and project experience, please see my skills sheet linked below.",
       skillsSheetLinkText: "View Skills Sheet (Google Document)",
+      techArticleLinkDescription: "Read my technical article on AI agent research.",
+      techArticleLinkText: "Read Tech Article",
       gameLinkDescription: "You can play the FPS game from this link.",
       gameLinkText: "Play Game",
       cardGameLinkDescription: "You can play the card game from this link.",
@@ -267,6 +276,20 @@ function App() {
         <section id="projects" className="content-section scroll-interactive-card" aria-labelledby="projects-heading">
           <h2 id="projects-heading">{profileData.sectionTitles.projects}</h2>
           <p>{profileData.projects}</p>
+        </section>
+
+        <section id="tech-article" className="content-section scroll-interactive-card" aria-labelledby="tech-article-heading">
+          <h2 id="tech-article-heading">{profileData.sectionTitles.techArticle}</h2>
+          <p className="tech-article-description">{profileData.uiStrings.techArticleLinkDescription}</p>
+          <a
+            href="/ai-agent-research"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="contact-link-button"
+            aria-label={profileData.uiStrings.techArticleLinkText}
+          >
+            {profileData.uiStrings.techArticleLinkText}
+          </a>
         </section>
 
         <section id="game" className="content-section scroll-interactive-card" aria-labelledby="game-heading">
