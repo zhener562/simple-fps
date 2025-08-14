@@ -6,7 +6,8 @@
     "./simple-fps",
     "./all-about-shinji",
     "./card-game",
-    "./clone-shinji"
+    "./clone-shinji",
+    "./prometheus-novel"
   ],
   "scripts": {
     "build": "npm run build -ws"
