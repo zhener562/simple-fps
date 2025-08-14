@@ -56,6 +56,7 @@ async fn main(
             .service(Files::new("/card-game", "static/card-game/dist/").index_file("index.html"))
             .service(Files::new("/clone-shinji", "static/clone-shinji/dist/").index_file("index.html"))
             .service(Files::new("/ai-agent-research", "static/ai-agent-research/dist/").index_file("index.html"))
+            .service(Files::new("/prometheus-novel", "static/prometheus-novel/dist/").index_file("index.html"))
             .service(Files::new("/", "static/all-about-shinji/dist/").index_file("index.html"));
     };
 

@@ -1,0 +1,477 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Reset and base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --primary-bg: #0a0a0a;
+  --secondary-bg: #1a1a1a;
+  --accent-bg: #2a2a2a;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #707070;
+  --accent-color: #ff6b6b;
+  --accent-secondary: #4ecdc4;
+  --border-color: #333;
+  --shadow-light: rgba(255, 255, 255, 0.05);
+  --shadow-dark: rgba(0, 0, 0, 0.5);
+  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --gradient-accent: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  --reading-bg: #1a1a1a;
+  --reading-text: #e8e8e8;
+  --bookmark-active: #ffd700;
+}
+
+body {
+  font-family: 'Hiragino Kaku Gothic Pro', 'Meiryo', 'Yu Gothic', 'MS PGothic', sans-serif;
+  background: var(--primary-bg);
+  color: var(--text-primary);
+  line-height: 1.8;
+  font-size: 16px;
+  overflow-x: hidden;
+}
+
+/* App container */
+.app {
+  min-height: 100vh;
+  background: radial-gradient(ellipse at top, var(--secondary-bg) 0%, var(--primary-bg) 100%);
+}
+
+/* Novel index page styles */
+.novel-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 2rem;
+  animation: fadeIn 0.8s ease-out;
+}
+
+.novel-header {
+  text-align: center;
+  margin-bottom: 3rem;
+  padding: 2rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(10px);
+}
+
+.novel-title {
+  font-size: 3rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
+}
+
+.novel-subtitle {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-bottom: 1rem;
+}
+
+.novel-author {
+  font-size: 1.1rem;
+  color: var(--accent-color);
+  margin-bottom: 1.5rem;
+  font-weight: 500;
+}
+
+.novel-description {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* Chapter navigation */
+.chapter-nav {
+  margin-bottom: 3rem;
+}
+
+.chapter-nav h2 {
+  font-size: 2rem;
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  text-align: center;
+  position: relative;
+}
+
+.chapter-nav h2::after {
+  content: '';
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 3px;
+  background: var(--gradient-accent);
+  border-radius: 2px;
+}
+
+.chapter-list {
+  list-style: none;
+  display: grid;
+  gap: 1rem;
+}
+
+.chapter-item {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: slideInUp 0.6s ease-out forwards;
+}
+
+.chapter-item:nth-child(1) { animation-delay: 0.1s; }
+.chapter-item:nth-child(2) { animation-delay: 0.2s; }
+.chapter-item:nth-child(3) { animation-delay: 0.3s; }
+.chapter-item:nth-child(4) { animation-delay: 0.4s; }
+.chapter-item:nth-child(5) { animation-delay: 0.5s; }
+
+.chapter-link {
+  display: block;
+  width: 100%;
+  padding: 1.5rem 2rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 15px;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  backdrop-filter: blur(5px);
+  position: relative;
+  overflow: hidden;
+}
+
+.chapter-link::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: var(--gradient-primary);
+  opacity: 0;
+  transition: all 0.3s ease;
+  z-index: -1;
+}
+
+.chapter-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  border-color: var(--accent-color);
+}
+
+.chapter-link:hover::before {
+  left: 0;
+  opacity: 0.1;
+}
+
+.chapter-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.chapter-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.progress-indicator {
+  background: rgba(78, 205, 196, 0.2);
+  color: var(--accent-secondary);
+  padding: 0.2rem 0.8rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  border: 1px solid var(--accent-secondary);
+}
+
+.bookmark-indicator {
+  font-size: 1.2rem;
+  color: var(--bookmark-active);
+  filter: drop-shadow(0 0 5px var(--bookmark-active));
+}
+
+/* Chapter reading page */
+.chapter-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+  background: var(--reading-bg);
+  min-height: 100vh;
+  animation: fadeIn 0.6s ease-out;
+}
+
+.chapter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.nav-button {
+  padding: 0.8rem 1.5rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 25px;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  backdrop-filter: blur(5px);
+}
+
+.nav-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(135deg, var(--accent-color) 0%, #ff8787 100%);
+  border-color: var(--accent-color);
+}
+
+.bookmark-button {
+  font-size: 1.5rem;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.bookmark-button.bookmarked {
+  background: linear-gradient(135deg, var(--bookmark-active) 0%, #ffed4e 100%);
+  color: var(--primary-bg);
+  transform: scale(1.1);
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+
+.bookmark-button:hover {
+  transform: scale(1.15);
+}
+
+/* Chapter content */
+.chapter-content {
+  margin: 3rem 0;
+  line-height: 2;
+}
+
+.chapter-content .chapter-title {
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: var(--reading-text);
+  margin-bottom: 2rem;
+  text-align: center;
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border-radius: 10px;
+  border-left: 4px solid var(--accent-color);
+}
+
+.chapter-text {
+  font-size: 1.1rem;
+  color: var(--reading-text);
+  line-height: 2.2;
+  text-align: justify;
+  letter-spacing: 0.02em;
+  white-space: pre-line;
+}
+
+.chapter-text p {
+  margin-bottom: 1.5rem;
+  text-indent: 1em;
+}
+
+/* Chapter navigation */
+.chapter-navigation {
+  margin-top: 4rem;
+  padding-top: 2rem;
+  border-top: 2px solid var(--border-color);
+}
+
+.nav-buttons {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nav-button.prev,
+.nav-button.next {
+  flex: 1;
+  max-width: 300px;
+  padding: 1rem 1.5rem;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.nav-button.prev {
+  margin-right: auto;
+}
+
+.nav-button.next {
+  margin-left: auto;
+}
+
+/* Footer */
+.novel-footer {
+  text-align: center;
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.back-link {
+  display: inline-block;
+  padding: 1rem 2rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 25px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(5px);
+}
+
+.back-link:hover {
+  color: var(--text-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(135deg, var(--accent-secondary) 0%, #5fd3ca 100%);
+  border-color: var(--accent-secondary);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .novel-container,
+  .chapter-container {
+    padding: 1rem;
+  }
+  
+  .novel-title {
+    font-size: 2rem;
+  }
+  
+  .chapter-list {
+    gap: 0.8rem;
+  }
+  
+  .chapter-link {
+    padding: 1rem 1.5rem;
+  }
+  
+  .chapter-content .chapter-title {
+    font-size: 1.8rem;
+  }
+  
+  .chapter-text {
+    font-size: 1rem;
+    line-height: 2;
+  }
+  
+  .nav-buttons {
+    flex-direction: column;
+  }
+  
+  .nav-button.prev,
+  .nav-button.next {
+    max-width: none;
+  }
+  
+  .chapter-header {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: stretch;
+  }
+  
+  .bookmark-button {
+    align-self: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .novel-header {
+    padding: 1.5rem 1rem;
+  }
+  
+  .novel-title {
+    font-size: 1.8rem;
+  }
+  
+  .chapter-text {
+    font-size: 0.95rem;
+    line-height: 1.9;
+  }
+}
+
+/* Reading comfort enhancements */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Print styles */
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  
+  .chapter-header,
+  .chapter-navigation,
+  .novel-footer {
+    display: none;
+  }
+  
+  .chapter-text {
+    color: black;
+    line-height: 1.8;
+  }
+}

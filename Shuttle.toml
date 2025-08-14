@@ -6,6 +6,7 @@ assets = [
     "static/*/dist/assets/*",
     "static/simple-fps/dist/assets/89-terrain/*",
     "static/all-about-shinji/.env.local",
+    "static/prometheus-novel/dist/novel.txt",
     ]
 
 [deploy]
@@ -14,4 +15,5 @@ include = [
     "static/*/dist/assets/*", 
     "static/simple-fps/dist/assets/89-terrain/*",
     "static/all-about-shinji/.env.local",
+    "static/prometheus-novel/dist/novel.txt",
 ]
