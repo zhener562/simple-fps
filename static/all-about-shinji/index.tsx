@@ -16,6 +16,7 @@ interface ProfileSectionTitles {
   game: string;
   cardGame: string;
   aiBot: string; // Added for AI Bot section
+  novels: string; // Added for Novels section
   contact: string;
 }
 
@@ -35,6 +36,8 @@ interface ProfileUIStrings {
   cardGameLinkText: string;
   aiBotLinkDescription: string; // Added for AI Bot section
   aiBotLinkText: string; // Added for AI Bot section
+  novelsLinkDescription: string; // Added for Novels section
+  novelsLinkText: string; // Added for Novels section
 }
 
 interface ProfileData {
@@ -77,6 +80,7 @@ const translations: Record<string, ProfileData> = {
       game: "ゲーム",
       cardGame: "カードゲーム",
       aiBot: "AIボット",
+      novels: "小説",
       contact: "お問い合わせ"
     },
     uiStrings: {
@@ -95,6 +99,8 @@ const translations: Record<string, ProfileData> = {
       cardGameLinkText: "カードゲームをプレイ",
       aiBotLinkDescription: "AIボットが私の代わりにご質問にお答えします。",
       aiBotLinkText: "AIボットと話す",
+      novelsLinkDescription: "オリジナル小説をお読みいただけます。",
+      novelsLinkText: "小説を読む",
     }
   },
   en: {
@@ -126,6 +132,7 @@ const translations: Record<string, ProfileData> = {
       game: "Game",
       cardGame: "Card Game",
       aiBot: "AI Bot",
+      novels: "Novels",
       contact: "Get in Touch"
     },
     uiStrings: {
@@ -144,6 +151,8 @@ const translations: Record<string, ProfileData> = {
       cardGameLinkText: "Play Card Game",
       aiBotLinkDescription: "An AI bot will answer your questions on my behalf.",
       aiBotLinkText: "Talk to AI Bot",
+      novelsLinkDescription: "You can read my original novels here.",
+      novelsLinkText: "Read Novels",
     }
   }
 };
@@ -331,6 +340,20 @@ function App() {
             aria-label={profileData.uiStrings.aiBotLinkText}
           >
             {profileData.uiStrings.aiBotLinkText}
+          </a>
+        </section>
+
+        <section id="novels" className="content-section scroll-interactive-card" aria-labelledby="novels-heading">
+          <h2 id="novels-heading">{profileData.sectionTitles.novels}</h2>
+          <p className="novels-description">{profileData.uiStrings.novelsLinkDescription}</p>
+          <a
+            href="/prometheus-novel"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="contact-link-button"
+            aria-label={profileData.uiStrings.novelsLinkText}
+          >
+            {profileData.uiStrings.novelsLinkText}
           </a>
         </section>
 
