@@ -188,7 +188,7 @@ function App() {
 
       <footer className="article-footer">
         <a
-          href="/all-about-shinji"
+          href="/"
           className="back-to-profile-button"
           aria-label={articleData.backToProfile}
         >

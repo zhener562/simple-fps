@@ -668,7 +668,7 @@ function App() {
       </div>
       
       <div className="back-button">
-        <button onClick={() => window.location.href = '/all-about-shinji'}>
+        <button onClick={() => window.location.href = '/'}>
           ← 戻る
         </button>
       </div>
