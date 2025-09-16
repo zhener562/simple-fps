@@ -850,55 +850,6 @@ body {
   padding-top: calc(2rem + 10px); /* Add space for progress bar */
 }
 
-/* Fullscreen reading mode */
-.fullscreen-mode {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 999;
-  background: var(--reading-bg);
-  padding: 2rem 4rem;
-  overflow-y: auto;
-}
-
-.fullscreen-mode .chapter-content {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 2rem 0;
-}
-
-.fullscreen-mode .progress-bar {
-  z-index: 1001;
-}
-
-/* Fullscreen button */
-.fullscreen-button {
-  padding: 0.8rem;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
-  border: 1px solid var(--border-color);
-  border-radius: 50%;
-  color: var(--text-primary);
-  text-decoration: none;
-  transition: all 0.3s ease;
-  cursor: pointer;
-  font-size: 1.2rem;
-  width: 45px;
-  height: 45px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(5px);
-}
-
-.fullscreen-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-  background: linear-gradient(135deg, var(--accent-color) 0%, #ff8787 100%);
-  border-color: var(--accent-color);
-}
-
 /* Keyboard shortcuts help overlay */
 .shortcuts-help {
   position: fixed;

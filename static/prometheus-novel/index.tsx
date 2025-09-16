@@ -619,7 +619,6 @@ function App() {
   const [colorTheme, setColorTheme] = useState<string>('dark');
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load novel data and localStorage on mount
@@ -824,41 +823,34 @@ function App() {
     const nextChapter = currentIndex < novelData.chapters.length - 1 ? novelData.chapters[currentIndex + 1] : null;
 
     return (
-      <div className={`chapter-container ${isFullscreen ? 'fullscreen-mode' : ''}`}>
+      <div className="chapter-container">
         <div className="progress-bar">
           <div
             className="progress-fill"
             style={{ width: `${scrollProgress}%` }}
           />
         </div>
-        {!isFullscreen && <header className="chapter-header">
+        <header className="chapter-header">
           <button className="nav-button back-to-index" onClick={() => setCurrentChapter('index')}>
             ← 目次に戻る
           </button>
           <div className="header-controls">
             <button
-              className="fullscreen-button"
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              title="全画面読書モード (F)"
-            >
-              {isFullscreen ? '🔳' : '🔲'}
-            </button>
-            <button
               className="settings-button"
               onClick={() => setShowSettings(!showSettings)}
-              title="読書設定 (S)"
+              title="読書設定"
             >
               ⚙️
             </button>
             <button
               className={`bookmark-button ${bookmarks.includes(chapterId) ? 'bookmarked' : ''}`}
               onClick={() => toggleBookmark(chapterId)}
-              title="ブックマーク (B)"
+              title="ブックマーク"
             >
               📖
             </button>
           </div>
-        </header>}
+        </header>
         
         <article className="chapter-content">
           <h1 className="chapter-title">{chapter.title}</h1>
@@ -873,7 +865,7 @@ function App() {
           </div>
         </article>
         
-        {!isFullscreen && <nav className="chapter-navigation">
+        <nav className="chapter-navigation">
           <div className="nav-buttons">
             {prevChapter && (
               <button
@@ -892,7 +884,7 @@ function App() {
               </button>
             )}
           </div>
-        </nav>}
+        </nav>
       </div>
     );
   };
@@ -997,22 +989,12 @@ function App() {
           }
           break;
 
-        case 'f':
-        case 'F':
-          if (e.ctrlKey || e.metaKey) {
-            return; // Don't interfere with browser find
-          }
-          e.preventDefault();
-          if (currentChapter !== 'index' && currentView === 'novel') {
-            setIsFullscreen(!isFullscreen);
-          }
-          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentChapter, currentView, showSettings, novelData, isFullscreen]);
+  }, [currentChapter, currentView, showSettings, novelData]);
 
   // Show loading state while novel data is being loaded
   if (isLoading) {
