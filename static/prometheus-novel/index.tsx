@@ -614,6 +614,12 @@ function App() {
   const [currentChapter, setCurrentChapter] = useState<string>('index');
   const [readingProgress, setReadingProgress] = useState<{[key: string]: number}>({});
   const [bookmarks, setBookmarks] = useState<string[]>([]);
+  const [fontSize, setFontSize] = useState<number>(1.1);
+  const [lineHeight, setLineHeight] = useState<number>(2.2);
+  const [colorTheme, setColorTheme] = useState<string>('dark');
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [scrollProgress, setScrollProgress] = useState<number>(0);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load novel data and localStorage on mount
@@ -624,12 +630,24 @@ function App() {
       // Load localStorage data
       const savedProgress = localStorage.getItem('novel-progress');
       const savedBookmarks = localStorage.getItem('novel-bookmarks');
-      
+      const savedFontSize = localStorage.getItem('novel-fontSize');
+      const savedLineHeight = localStorage.getItem('novel-lineHeight');
+      const savedColorTheme = localStorage.getItem('novel-colorTheme');
+
       if (savedProgress) {
         setReadingProgress(JSON.parse(savedProgress));
       }
       if (savedBookmarks) {
         setBookmarks(JSON.parse(savedBookmarks));
+      }
+      if (savedFontSize) {
+        setFontSize(parseFloat(savedFontSize));
+      }
+      if (savedLineHeight) {
+        setLineHeight(parseFloat(savedLineHeight));
+      }
+      if (savedColorTheme) {
+        setColorTheme(savedColorTheme);
       }
       
       setIsLoading(false);
@@ -637,6 +655,20 @@ function App() {
     
     initializeApp();
   }, []);
+
+  // Save settings to localStorage
+  const saveSettings = () => {
+    localStorage.setItem('novel-fontSize', fontSize.toString());
+    localStorage.setItem('novel-lineHeight', lineHeight.toString());
+    localStorage.setItem('novel-colorTheme', colorTheme);
+  };
+
+  // Apply settings when they change
+  useEffect(() => {
+    saveSettings();
+    // Apply color theme to document root
+    document.documentElement.setAttribute('data-theme', colorTheme);
+  }, [fontSize, lineHeight, colorTheme]);
 
   // Function to select and load a novel
   const selectNovel = async (novelKey: string) => {
@@ -688,6 +720,48 @@ function App() {
         <button onClick={() => window.location.href = '/'}>
           ← 戻る
         </button>
+      </div>
+    </div>
+  );
+
+  const renderSettings = () => (
+    <div className="settings-panel">
+      <div className="settings-header">
+        <h3>読書設定</h3>
+        <button className="close-settings" onClick={() => setShowSettings(false)}>×</button>
+      </div>
+      <div className="settings-content">
+        <div className="setting-group">
+          <label>文字サイズ: {fontSize}rem</label>
+          <input
+            type="range"
+            min="0.8"
+            max="2.0"
+            step="0.1"
+            value={fontSize}
+            onChange={(e) => setFontSize(parseFloat(e.target.value))}
+          />
+        </div>
+        <div className="setting-group">
+          <label>行間: {lineHeight}</label>
+          <input
+            type="range"
+            min="1.4"
+            max="3.0"
+            step="0.1"
+            value={lineHeight}
+            onChange={(e) => setLineHeight(parseFloat(e.target.value))}
+          />
+        </div>
+        <div className="setting-group">
+          <label>テーマ</label>
+          <select value={colorTheme} onChange={(e) => setColorTheme(e.target.value)}>
+            <option value="dark">ダーク</option>
+            <option value="light">ライト</option>
+            <option value="sepia">セピア</option>
+            <option value="blue-light">ブルーライトカット</option>
+          </select>
+        </div>
       </div>
     </div>
   );
@@ -750,26 +824,56 @@ function App() {
     const nextChapter = currentIndex < novelData.chapters.length - 1 ? novelData.chapters[currentIndex + 1] : null;
 
     return (
-      <div className="chapter-container">
-        <header className="chapter-header">
+      <div className={`chapter-container ${isFullscreen ? 'fullscreen-mode' : ''}`}>
+        <div className="progress-bar">
+          <div
+            className="progress-fill"
+            style={{ width: `${scrollProgress}%` }}
+          />
+        </div>
+        {!isFullscreen && <header className="chapter-header">
           <button className="nav-button back-to-index" onClick={() => setCurrentChapter('index')}>
             ← 目次に戻る
           </button>
-          <button
-            className={`bookmark-button ${bookmarks.includes(chapterId) ? 'bookmarked' : ''}`}
-            onClick={() => toggleBookmark(chapterId)}
-            title="ブックマーク"
-          >
-            📖
-          </button>
-        </header>
+          <div className="header-controls">
+            <button
+              className="fullscreen-button"
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              title="全画面読書モード (F)"
+            >
+              {isFullscreen ? '🔳' : '🔲'}
+            </button>
+            <button
+              className="settings-button"
+              onClick={() => setShowSettings(!showSettings)}
+              title="読書設定 (S)"
+            >
+              ⚙️
+            </button>
+            <button
+              className={`bookmark-button ${bookmarks.includes(chapterId) ? 'bookmarked' : ''}`}
+              onClick={() => toggleBookmark(chapterId)}
+              title="ブックマーク (B)"
+            >
+              📖
+            </button>
+          </div>
+        </header>}
         
         <article className="chapter-content">
           <h1 className="chapter-title">{chapter.title}</h1>
-          <div className="chapter-text">{chapter.content}</div>
+          <div
+            className="chapter-text"
+            style={{
+              fontSize: `${fontSize}rem`,
+              lineHeight: lineHeight
+            }}
+          >
+            {chapter.content}
+          </div>
         </article>
         
-        <nav className="chapter-navigation">
+        {!isFullscreen && <nav className="chapter-navigation">
           <div className="nav-buttons">
             {prevChapter && (
               <button
@@ -788,7 +892,7 @@ function App() {
               </button>
             )}
           </div>
-        </nav>
+        </nav>}
       </div>
     );
   };
@@ -801,7 +905,9 @@ function App() {
       const scrolled = window.scrollY;
       const maxScroll = document.body.scrollHeight - window.innerHeight;
       const progress = maxScroll > 0 ? Math.min((scrolled / maxScroll) * 100, 100) : 100;
-      
+
+      setScrollProgress(progress);
+
       if (progress > (readingProgress[currentChapter] || 0)) {
         saveProgress(currentChapter, progress);
       }
@@ -810,6 +916,103 @@ function App() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, [currentChapter, readingProgress]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle shortcuts when not in input fields
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
+        return;
+      }
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          e.preventDefault();
+          if (currentChapter !== 'index' && currentView === 'novel') {
+            const currentIndex = novelData.chapters.findIndex(ch => ch.id === currentChapter);
+            const prevChapter = currentIndex > 0 ? novelData.chapters[currentIndex - 1] : null;
+            if (prevChapter) {
+              setCurrentChapter(prevChapter.id);
+            } else {
+              setCurrentChapter('index');
+            }
+          }
+          break;
+
+        case 'ArrowRight':
+          e.preventDefault();
+          if (currentChapter === 'index' && currentView === 'novel') {
+            setCurrentChapter(novelData.chapters[0].id);
+          } else if (currentChapter !== 'index' && currentView === 'novel') {
+            const currentIndex = novelData.chapters.findIndex(ch => ch.id === currentChapter);
+            const nextChapter = currentIndex < novelData.chapters.length - 1 ? novelData.chapters[currentIndex + 1] : null;
+            if (nextChapter) {
+              setCurrentChapter(nextChapter.id);
+            }
+          }
+          break;
+
+        case ' ':
+          e.preventDefault();
+          window.scrollBy(0, window.innerHeight * 0.8);
+          break;
+
+        case 'Home':
+          e.preventDefault();
+          window.scrollTo(0, 0);
+          break;
+
+        case 'End':
+          e.preventDefault();
+          window.scrollTo(0, document.body.scrollHeight);
+          break;
+
+        case 'Escape':
+          e.preventDefault();
+          if (showSettings) {
+            setShowSettings(false);
+          } else if (currentChapter !== 'index' && currentView === 'novel') {
+            setCurrentChapter('index');
+          } else if (currentView === 'novel') {
+            setCurrentView('selection');
+          }
+          break;
+
+        case 's':
+        case 'S':
+          if (e.ctrlKey || e.metaKey) {
+            return; // Don't interfere with save
+          }
+          e.preventDefault();
+          if (currentChapter !== 'index' && currentView === 'novel') {
+            setShowSettings(!showSettings);
+          }
+          break;
+
+        case 'b':
+        case 'B':
+          e.preventDefault();
+          if (currentChapter !== 'index' && currentView === 'novel') {
+            toggleBookmark(currentChapter);
+          }
+          break;
+
+        case 'f':
+        case 'F':
+          if (e.ctrlKey || e.metaKey) {
+            return; // Don't interfere with browser find
+          }
+          e.preventDefault();
+          if (currentChapter !== 'index' && currentView === 'novel') {
+            setIsFullscreen(!isFullscreen);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentChapter, currentView, showSettings, novelData, isFullscreen]);
 
   // Show loading state while novel data is being loaded
   if (isLoading) {
@@ -824,8 +1027,9 @@ function App() {
 
   return (
     <div className="app">
-      {currentView === 'selection' ? renderSelection() : 
+      {currentView === 'selection' ? renderSelection() :
        currentChapter === 'index' ? renderIndex() : renderChapter(currentChapter)}
+      {showSettings && renderSettings()}
     </div>
   );
 }
